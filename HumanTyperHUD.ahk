@@ -1,5 +1,6 @@
-#Requires AutoHotkey v2.0
+﻿#Requires AutoHotkey v2.0
 #SingleInstance Force
+#MaxThreadsPerHotkey 2  ; ALLOWS THE HOTKEY TO FIRE AGAIN TO TOGGLE PAUSE
 
 ; -------------------------------------------------------------------------
 ; CORE SETTINGS & INITIALIZATION
@@ -29,8 +30,9 @@ Global BrainstormFreq  := DefaultBrainstormFreq
 Global EmojiPause      := DefaultEmojiPause
 Global CurrentMomentum := 0 
 
-; Pause State Variable
+; State Variables
 Global IsPaused := false
+Global IsRunning := false ; TRACKS IF TYPING IS ACTIVE
 
 ; Layout Maps
 Global LayoutMaps := Map()
@@ -120,23 +122,24 @@ LoadSettings() {
 }
 
 ; -------------------------------------------------------------------------
-; PAUSE TOGGLE (F1)
-; -------------------------------------------------------------------------
-F1::
-{
-    Global IsPaused := !IsPaused
-}
-
-; -------------------------------------------------------------------------
 ; PRODUCTION TYPING ENGINE: Ctrl + Alt + V
 ; -------------------------------------------------------------------------
 ^!v::
 {
-    Global IsPaused
+    Global IsPaused, IsRunning
     
+    ; --- TOGGLE PAUSE IF ALREADY RUNNING ---
+    if (IsRunning) {
+        IsPaused := !IsPaused
+        return
+    }
+
+    ; --- START NEW TYPING SESSION ---
     if !A_Clipboard
         return
 
+    IsRunning := true  ; Lock the function
+    
     KeyWait "Ctrl"
     KeyWait "Shift"
     KeyWait "Alt"
@@ -149,15 +152,18 @@ F1::
     TotalLen := StrLen(TextToType)
 
     if (TotalLen > 5000) {
-        if (MsgBox("Type " TotalLen " chars?", "Large Paste", "YesNo IconExclamation") = "No")
+        if (MsgBox("Type " TotalLen " chars?", "Large Paste", "YesNo IconExclamation") = "No") {
+            IsRunning := false
             return
+        }
     }
 
     ; --- SETUP KEYBOARD BLOCKER ---
     Blocker := InputHook("L0")
     Blocker.MinSendLevel := 2 
     Blocker.KeyOpt("{All}", "S")        ; Suppress (Block) all keys it sees
-    Blocker.KeyOpt("{F1}{Esc}", "-S")   ; Explicitly allow F1 (Pause) and Esc (Cancel)
+    Blocker.KeyOpt("{Esc}", "-S")       ; Explicitly allow Esc (Cancel)
+    ; Note: Ctrl+Alt+V bypasses the blocker via #MaxThreadsPerHotkey
     Blocker.Start()
 
     CurrentMomentum := 0
@@ -169,12 +175,13 @@ F1::
         ; --- PAUSE LOGIC ---
         if (IsPaused) {
             Blocker.Stop() ; Re-enable keyboard so user can type/fix things
-            ToolTip("⏸️ PAUSED (Press F1 to Resume)")
+            ToolTip("⏸️ PAUSED (Press Ctrl+Alt+V to Resume)")
             
             While (IsPaused) {
                 if GetKeyState("Esc", "P") { ; Allow quitting while paused
                     ToolTip("🔴 CANCELLED")
                     SetTimer () => ToolTip(), -2000
+                    IsRunning := false
                     return
                 }
                 Sleep 100
@@ -192,6 +199,7 @@ F1::
             Blocker.Stop()
             ToolTip("🔴 CANCELLED")
             SetTimer () => ToolTip(), -2000
+            IsRunning := false
             return
         }
 
@@ -311,6 +319,7 @@ F1::
 
     ; --- CLEANUP ---
     Blocker.Stop() ; Important: Unblock keyboard when done
+    IsRunning := false ; Reset running state
     ToolTip("✅ DONE")
     SetTimer () => ToolTip(), -2000
 }
