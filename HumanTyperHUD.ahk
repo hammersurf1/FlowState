@@ -1,4 +1,4 @@
-﻿#Requires AutoHotkey v2.0
+#Requires AutoHotkey v2.0
 #SingleInstance Force
 
 ; -------------------------------------------------------------------------
@@ -6,9 +6,9 @@
 ; -------------------------------------------------------------------------
 Global IniFile := A_ScriptDir "\settings.ini"
 
-; Defaults
-Global DefaultMeanDelay  := 60
-Global DefaultVariance   := 25
+; --- TUNED FOR REALISM V3 (FASTER & LESS UNIFORM) ---
+Global DefaultMeanDelay  := 40  ; Reduced from 60 to compensate for Key Hold Time
+Global DefaultVariance   := 35  ; Increased from 25 to add more rhythm imperfection
 Global DefaultTypoChance := 4
 Global DefaultTypoDelay  := 150
 
@@ -19,15 +19,18 @@ Global DefaultBrainstormFreq := 60
 Global DefaultEmojiPause     := 1800 
 
 ; Runtime Vars
-Global UserMeanDelay    := DefaultMeanDelay
-Global UserVariance     := DefaultVariance
-Global TypoChance       := DefaultTypoChance
-Global TypoDelay        := DefaultTypoDelay
-Global SentencePause    := DefaultSentencePause
-Global ParagraphPause   := DefaultParagraphPause
-Global BrainstormFreq   := DefaultBrainstormFreq
-Global EmojiPause       := DefaultEmojiPause
-Global CurrentMomentum  := 0 
+Global UserMeanDelay   := DefaultMeanDelay
+Global UserVariance    := DefaultVariance
+Global TypoChance      := DefaultTypoChance
+Global TypoDelay       := DefaultTypoDelay
+Global SentencePause   := DefaultSentencePause
+Global ParagraphPause  := DefaultParagraphPause
+Global BrainstormFreq  := DefaultBrainstormFreq
+Global EmojiPause      := DefaultEmojiPause
+Global CurrentMomentum := 0 
+
+; Pause State Variable
+Global IsPaused := false
 
 ; Layout Maps
 Global LayoutMaps := Map()
@@ -117,15 +120,26 @@ LoadSettings() {
 }
 
 ; -------------------------------------------------------------------------
+; PAUSE TOGGLE (F1)
+; -------------------------------------------------------------------------
+F1::
+{
+    Global IsPaused := !IsPaused
+}
+
+; -------------------------------------------------------------------------
 ; PRODUCTION TYPING ENGINE: Ctrl + Alt + V
 ; -------------------------------------------------------------------------
 ^!v::
 {
+    Global IsPaused
+    
     if !A_Clipboard
         return
 
     KeyWait "Ctrl"
     KeyWait "Shift"
+    KeyWait "Alt"
 
     TargetWin := WinExist("A")
     ActiveLayout := DetectKeyboardLayout(TargetWin)
@@ -139,13 +153,43 @@ LoadSettings() {
             return
     }
 
-    CurrentMomentum := 0
-    i := 1
-    SetKeyDelay 0, 20 
+    ; --- SETUP KEYBOARD BLOCKER ---
+    Blocker := InputHook("L0")
+    Blocker.MinSendLevel := 2 
+    Blocker.KeyOpt("{All}", "S")        ; Suppress (Block) all keys it sees
+    Blocker.KeyOpt("{F1}{Esc}", "-S")   ; Explicitly allow F1 (Pause) and Esc (Cancel)
+    Blocker.Start()
 
+    CurrentMomentum := 0
+    IsPaused := false
+    i := 1
+    
     While (i <= TotalLen)
     {
+        ; --- PAUSE LOGIC ---
+        if (IsPaused) {
+            Blocker.Stop() ; Re-enable keyboard so user can type/fix things
+            ToolTip("⏸️ PAUSED (Press F1 to Resume)")
+            
+            While (IsPaused) {
+                if GetKeyState("Esc", "P") { ; Allow quitting while paused
+                    ToolTip("🔴 CANCELLED")
+                    SetTimer () => ToolTip(), -2000
+                    return
+                }
+                Sleep 100
+            }
+            
+            ; Resuming
+            ToolTip("▶️ RESUMING...")
+            SetTimer () => ToolTip(), -1000
+            WinActivate(TargetWin) ; Ensure we are back in the window
+            Blocker.Start() ; Re-block keyboard
+        }
+
+        ; --- CANCEL LOGIC ---
         if GetKeyState("Esc", "P") {
+            Blocker.Stop()
             ToolTip("🔴 CANCELLED")
             SetTimer () => ToolTip(), -2000
             return
@@ -157,6 +201,50 @@ LoadSettings() {
         Char := SubStr(TextToType, i, 1)
         CharCode := Ord(Char)
         
+        ; -----------------------------------------------------------------------
+        ; FEATURE C: DELAYED TYPO REALIZATION
+        ; -----------------------------------------------------------------------
+        if (CharCode < 128 && Char != " " && Char != "`n" && Random(1, 100) <= TypoChance)
+        {
+            Neighbor := GetNeighbor(Char, NeighborMap)
+            
+            ; Only proceed if we found a valid neighbor key to "fat finger"
+            if (Neighbor != "") {
+                ; Determine how many characters we type before "noticing" the error (0 to 3)
+                RealizationDelay := Random(0, 3) 
+                
+                ; Don't overrun the text length
+                if (i + RealizationDelay >= TotalLen)
+                    RealizationDelay := 0
+
+                ; 1. Type the WRONG character first
+                HumanKeystroke(Neighbor) 
+                
+                ; 2. Type the "Buffer" characters (we haven't realized the error yet)
+                Loop RealizationDelay {
+                    BufferChar := SubStr(TextToType, i + A_Index, 1)
+                    HumanKeystroke(BufferChar)
+                    ; Standard spacing between these oblivious characters
+                    Sleep GaussianRandom(UserMeanDelay, UserVariance)
+                }
+
+                ; 3. THE "OH CRAP" MOMENT (Pause)
+                Sleep Random(TypoDelay * 2, TypoDelay * 4) 
+
+                ; 4. Rapidly Backspace (Faster than normal typing)
+                Loop (RealizationDelay + 1) {
+                    SendEvent "{Backspace}"
+                    Sleep Random(30, 60) ; Fast distinct backspaces
+                }
+                
+                Sleep Random(100, 200) ; Brief reset pause
+                CurrentMomentum := 0   ; Momentum destroyed by error
+                
+                ; We do NOT increment 'i' here. We loop back and try the original char again.
+                continue 
+            }
+        }
+
         ; --- A. EMOJI & UNICODE (WITH PAUSE) ---
         if (CharCode >= 0xD800 && CharCode <= 0xDBFF) {
             Sleep Random(EmojiPause, EmojiPause + 500)
@@ -172,7 +260,7 @@ LoadSettings() {
 
         ; --- B. COGNITIVE PAUSES ---
         if (Char = "." || Char = "?" || Char = "!") && (NextChar = " " || NextChar = "`n") {
-            SimulateKeystroke(Char)
+            HumanKeystroke(Char)
             Sleep Random(SentencePause, SentencePause + 400) 
             CurrentMomentum := 0 
             i++
@@ -180,7 +268,7 @@ LoadSettings() {
         }
 
         if (Char = "," || Char = ";") {
-            SimulateKeystroke(Char)
+            HumanKeystroke(Char)
             Sleep Random(300, 600) 
             CurrentMomentum := Max(0, CurrentMomentum - 5)
             i++
@@ -192,31 +280,6 @@ LoadSettings() {
             CurrentMomentum := 0 
         }
 
-        ; --- C. ADVANCED TYPO LOGIC ---
-        if (CharCode < 128 && Char != " " && Char != "`n" && Random(1, 100) <= TypoChance)
-        {
-            if (i < TotalLen && NextChar != " " && Random(1, 100) <= 40) {
-                SimulateKeystroke(NextChar)
-                Sleep GaussianRandom(UserMeanDelay - CurrentMomentum, UserVariance)
-                SimulateKeystroke(Char)
-                Sleep Random(TypoDelay, TypoDelay + 200) 
-                SendEvent "{Backspace 2}"
-                Sleep Random(50, 100)
-                CurrentMomentum := 0
-                continue 
-            }
-            
-            Neighbor := GetNeighbor(Char, NeighborMap)
-            if (Neighbor != "")
-            {
-                SimulateKeystroke(Neighbor)
-                Sleep Random(TypoDelay, TypoDelay + 200)
-                SendEvent "{Backspace}"
-                Sleep Random(50, 100)
-                CurrentMomentum := 0
-            }
-        }
-
         ; --- D. EXECUTION ---
         if (Char = "`n") {
             SendEvent "+{Enter}"
@@ -226,7 +289,7 @@ LoadSettings() {
             SendEvent "{Tab}"
             Sleep Random(50, 100)
         } else {
-            SimulateKeystroke(Char)
+            HumanKeystroke(Char)
             if (CurrentMomentum < 15)
                 CurrentMomentum += 0.5
         }
@@ -237,8 +300,8 @@ LoadSettings() {
             CalcMean -= 10
 
         FinalDelay := GaussianRandom(CalcMean, UserVariance)
-        if (FinalDelay < 20)
-            FinalDelay := 20
+        if (FinalDelay < 10)
+            FinalDelay := 10
         if (FinalDelay > 250)
             FinalDelay := 250
 
@@ -246,7 +309,8 @@ LoadSettings() {
         i++ 
     }
 
-    ; --- FINISHED TOOLTIP ---
+    ; --- CLEANUP ---
+    Blocker.Stop() ; Important: Unblock keyboard when done
     ToolTip("✅ DONE")
     SetTimer () => ToolTip(), -2000
 }
@@ -255,7 +319,23 @@ LoadSettings() {
 ; HELPERS
 ; -------------------------------------------------------------------------
 
-SimulateKeystroke(Char) {
+; FEATURE A: REALISTIC KEY DWELL TIME (TUNED FOR LIGHT TOUCH)
+HumanKeystroke(Char) {
+    ; 1. Calculate realistic "Hold Time" (Dwell)
+    ; V3 UPDATE: Lowered to 10-40ms (Light, fast touch) vs previous 40-90ms (Heavy/Slow)
+    DwellTime := Random(10, 40)
+    
+    ; 2. Apply this to the keystroke
+    ; SetKeyDelay: Delay, PressDuration
+    SetKeyDelay 0, DwellTime
+    
+    ; 3. Handle Special Shift Logic (Shift Overlap)
+    if IsUpper(Char) && Char != " " {
+        ; Sometimes humans hold Shift a bit too long
+        if (Random(1, 10) > 7)
+            SetKeyDelay 0, DwellTime + Random(20, 50)
+    }
+
     if (Char = "{")
         SendEvent "{{}"
     else if (Char = "}")
@@ -272,6 +352,9 @@ SimulateKeystroke(Char) {
         SendEvent "{#}"
     else
         SendEvent "{Raw}" Char
+        
+    ; Reset to default safe values
+    SetKeyDelay 10, 10
 }
 
 SurgicalPaste(Content) {
