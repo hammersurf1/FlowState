@@ -29,6 +29,7 @@ Global ParagraphPause  := DefaultParagraphPause
 Global BrainstormFreq  := DefaultBrainstormFreq
 Global EmojiPause      := DefaultEmojiPause
 Global CurrentMomentum := 0 
+Global LastEscTime     := 0 ; TRACKS ESCAPE DOUBLE TAP TIMING
 
 ; State Variables
 Global IsPaused := false
@@ -126,7 +127,7 @@ LoadSettings() {
 ; -------------------------------------------------------------------------
 ^!v::
 {
-    Global IsPaused, IsRunning
+    Global IsPaused, IsRunning, LastEscTime
     
     ; --- TOGGLE PAUSE IF ALREADY RUNNING ---
     if (IsRunning) {
@@ -162,12 +163,13 @@ LoadSettings() {
     Blocker := InputHook("L0")
     Blocker.MinSendLevel := 2 
     Blocker.KeyOpt("{All}", "S")        ; Suppress (Block) all keys it sees
-    Blocker.KeyOpt("{Esc}", "-S")       ; Explicitly allow Esc (Cancel)
+    Blocker.KeyOpt("{Esc}", "-S")       ; Explicitly allow Esc (Cancel/Unlock)
     ; Note: Ctrl+Alt+V bypasses the blocker via #MaxThreadsPerHotkey
     Blocker.Start()
 
     CurrentMomentum := 0
     IsPaused := false
+    LastEscTime := 0
     i := 1
     
     While (i <= TotalLen)
@@ -175,16 +177,23 @@ LoadSettings() {
         ; --- PAUSE LOGIC ---
         if (IsPaused) {
             Blocker.Stop() ; Re-enable keyboard so user can type/fix things
-            ToolTip("⏸️ PAUSED (Press Ctrl+Alt+V to Resume)")
+            ToolTip("⏸️ PAUSED (Press Ctrl+Alt+V to Resume, Esc to Cancel)")
             
             While (IsPaused) {
-                if GetKeyState("Esc", "P") { ; Allow quitting while paused
-                    ToolTip("🔴 CANCELLED")
-                    SetTimer () => ToolTip(), -2000
-                    IsRunning := false
-                    return
+                ; HANDLE ESCAPE WHILE PAUSED (Double Tap Check)
+                if GetKeyState("Esc", "P") { 
+                    if (A_TickCount - LastEscTime < 500) {
+                        ; Double Tap Detected -> CANCEL
+                        ToolTip("🔴 CANCELLED")
+                        SetTimer () => ToolTip(), -2000
+                        IsRunning := false
+                        return
+                    }
+                    ; Update time to track potential double tap
+                    LastEscTime := A_TickCount
+                    KeyWait "Esc" 
                 }
-                Sleep 100
+                Sleep 50
             }
             
             ; Resuming
@@ -194,13 +203,23 @@ LoadSettings() {
             Blocker.Start() ; Re-block keyboard
         }
 
-        ; --- CANCEL LOGIC ---
+        ; --- ESCAPE LOGIC (PAUSE OR CANCEL) ---
         if GetKeyState("Esc", "P") {
-            Blocker.Stop()
-            ToolTip("🔴 CANCELLED")
-            SetTimer () => ToolTip(), -2000
-            IsRunning := false
-            return
+            CurrentTime := A_TickCount
+            if (CurrentTime - LastEscTime < 500) {
+                ; Double Tap Detected -> CANCEL
+                Blocker.Stop()
+                ToolTip("🔴 CANCELLED")
+                SetTimer () => ToolTip(), -2000
+                IsRunning := false
+                return
+            } else {
+                ; Single Tap Detected -> PAUSE
+                IsPaused := true
+                LastEscTime := CurrentTime
+                KeyWait "Esc" ; Wait for release
+                continue ; Restart loop to enter Pause state immediately
+            }
         }
 
         if !WinActive(TargetWin)
@@ -317,10 +336,22 @@ LoadSettings() {
         i++ 
     }
 
-    ; --- CLEANUP ---
-    Blocker.Stop() ; Important: Unblock keyboard when done
+    ; -------------------------------------------------------------------------
+    ; CLEANUP & CONFIRMATION
+    ; -------------------------------------------------------------------------
+    ; The keyboard is STILL blocked here (InputHook is running).
+    ; We force the user to press ESC to prove they are back.
+    
+    ToolTip("✅ DONE`n🔒 Keyboard still locked.`n👉 Press [ESC] to unlock.")
+    SoundBeep 600, 150 ; Small audible cue
+
+    ; Wait for the user to press ESC to finish the script
+    KeyWait "Esc", "D" 
+    KeyWait "Esc"
+    
+    Blocker.Stop() ; NOW we unblock
     IsRunning := false ; Reset running state
-    ToolTip("✅ DONE")
+    ToolTip("🔓 KEYBOARD UNLOCKED")
     SetTimer () => ToolTip(), -2000
 }
 
@@ -331,7 +362,6 @@ LoadSettings() {
 ; FEATURE A: REALISTIC KEY DWELL TIME (TUNED FOR LIGHT TOUCH)
 HumanKeystroke(Char) {
     ; 1. Calculate realistic "Hold Time" (Dwell)
-    ; V3 UPDATE: Lowered to 10-40ms (Light, fast touch) vs previous 40-90ms (Heavy/Slow)
     DwellTime := Random(10, 40)
     
     ; 2. Apply this to the keystroke
@@ -437,5 +467,3 @@ InitializeLayouts() {
         " "," "
     )
 }
-
-Esc::Reload
