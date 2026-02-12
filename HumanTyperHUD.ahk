@@ -42,7 +42,7 @@ InitializeLayouts()
 ; HUD Globals
 Global CurrentSettingIndex := 1
 Global SettingsList := ["UserMeanDelay", "UserVariance", "TypoChance", "TypoDelay"]
-Global SettingNames := ["Typing Speed (Lower is Faster)", "Variance (Consistency)", "Typo Chance (%)", "Typo Correction Speed"]
+Global SettingNames := ["Typing Speed (Lower is Faster)", "Variance (Lower is Consistent)", "Typo Chance (%)", "Typo Correction Speed (Lower is Faster)"]
 Global DefaultsMap := Map("UserMeanDelay", DefaultMeanDelay, "UserVariance", DefaultVariance, "TypoChance", DefaultTypoChance, "TypoDelay", DefaultTypoDelay)
 
 ; Load INI
