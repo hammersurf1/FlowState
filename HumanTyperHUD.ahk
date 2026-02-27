@@ -1,17 +1,18 @@
 ﻿#Requires AutoHotkey v2.0
 #SingleInstance Force
-#MaxThreadsPerHotkey 2  ; ALLOWS THE HOTKEY TO FIRE AGAIN TO TOGGLE PAUSE
+#MaxThreadsPerHotkey 2
 
 ; -------------------------------------------------------------------------
 ; CORE SETTINGS & INITIALIZATION
 ; -------------------------------------------------------------------------
 Global IniFile := A_ScriptDir "\settings.ini"
 
-; --- TUNED FOR REALISM V3 (FASTER & LESS UNIFORM) ---
-Global DefaultMeanDelay  := 40  ; Reduced from 60 to compensate for Key Hold Time
-Global DefaultVariance   := 35  ; Increased from 25 to add more rhythm imperfection
-Global DefaultTypoChance := 4
-Global DefaultTypoDelay  := 150
+; --- TUNED FOR REALISM ---
+Global DefaultMeanDelay  := 35
+Global DefaultVariance   := 45
+Global DefaultTypoChance := 3
+Global DefaultTypoDelay  := 125
+Global DefaultRevChance  := 5   ; Base revision chance (will vary dynamically)
 
 ; Cognitive Defaults
 Global DefaultSentencePause  := 1200
@@ -24,16 +25,17 @@ Global UserMeanDelay   := DefaultMeanDelay
 Global UserVariance    := DefaultVariance
 Global TypoChance      := DefaultTypoChance
 Global TypoDelay       := DefaultTypoDelay
+Global RevisionChance  := DefaultRevChance
 Global SentencePause   := DefaultSentencePause
 Global ParagraphPause  := DefaultParagraphPause
 Global BrainstormFreq  := DefaultBrainstormFreq
 Global EmojiPause      := DefaultEmojiPause
 Global CurrentMomentum := 0 
-Global LastEscTime     := 0 ; TRACKS ESCAPE DOUBLE TAP TIMING
+Global LastEscTime     := 0
 
 ; State Variables
 Global IsPaused := false
-Global IsRunning := false ; TRACKS IF TYPING IS ACTIVE
+Global IsRunning := false
 
 ; Layout Maps
 Global LayoutMaps := Map()
@@ -41,9 +43,9 @@ InitializeLayouts()
 
 ; HUD Globals
 Global CurrentSettingIndex := 1
-Global SettingsList := ["UserMeanDelay", "UserVariance", "TypoChance", "TypoDelay"]
-Global SettingNames := ["Typing Speed (Lower is Faster)", "Variance (Lower is Consistent)", "Typo Chance (%)", "Typo Correction Speed (Lower is Faster)"]
-Global DefaultsMap := Map("UserMeanDelay", DefaultMeanDelay, "UserVariance", DefaultVariance, "TypoChance", DefaultTypoChance, "TypoDelay", DefaultTypoDelay)
+Global SettingsList := ["UserMeanDelay", "UserVariance", "TypoChance", "TypoDelay", "RevisionChance"]
+Global SettingNames := ["Typing Speed (Lower is Faster)", "Variance (Lower is Consistent)", "Typo Chance (%)", "Typo Correction Speed", "Base Revision Chance (%)"]
+Global DefaultsMap := Map("UserMeanDelay", DefaultMeanDelay, "UserVariance", DefaultVariance, "TypoChance", DefaultTypoChance, "TypoDelay", DefaultTypoDelay, "RevisionChance", DefaultRevChance)
 
 ; Load INI
 if !FileExist(IniFile)
@@ -52,12 +54,11 @@ else
     LoadSettings()
 
 ; -------------------------------------------------------------------------
-; HUD LOGIC (REFACTORED FOR RUNTIME USE)
+; HUD LOGIC
 ; -------------------------------------------------------------------------
 CycleHUD(Direction) {
     Global CurrentSettingIndex
     CurrentSettingIndex += Direction
-    
     if (CurrentSettingIndex > SettingsList.Length)
         CurrentSettingIndex := 1
     if (CurrentSettingIndex < 1)
@@ -66,10 +67,10 @@ CycleHUD(Direction) {
 }
 
 AdjustHUD(Direction) {
-    Global UserMeanDelay, UserVariance, TypoChance, TypoDelay, CurrentSettingIndex
+    Global UserMeanDelay, UserVariance, TypoChance, TypoDelay, RevisionChance, CurrentSettingIndex
     CurrentVar := SettingsList[CurrentSettingIndex]
     CurrentVal := %CurrentVar%
-    Step := (CurrentVar = "TypoChance") ? 1 : (CurrentVar = "TypoDelay") ? 25 : 5
+    Step := (CurrentVar = "TypoChance" || CurrentVar = "RevisionChance") ? 1 : (CurrentVar = "TypoDelay") ? 25 : 5
 
     if (Direction > 0)
         %CurrentVar% := CurrentVal + Step
@@ -98,6 +99,7 @@ SaveSettings() {
     IniWrite(UserVariance,  IniFile, "Settings", "UserVariance")
     IniWrite(TypoChance,    IniFile, "Settings", "TypoChance")
     IniWrite(TypoDelay,     IniFile, "Settings", "TypoDelay")
+    IniWrite(RevisionChance,IniFile, "Settings", "RevisionChance")
     IniWrite(SentencePause, IniFile, "Advanced", "SentencePauseMs")
     IniWrite(ParagraphPause,IniFile, "Advanced", "ParagraphPauseMs")
     IniWrite(BrainstormFreq,IniFile, "Advanced", "BrainstormFrequency")
@@ -109,6 +111,7 @@ LoadSettings() {
     Global UserVariance   := IniRead(IniFile, "Settings", "UserVariance", DefaultVariance)
     Global TypoChance     := IniRead(IniFile, "Settings", "TypoChance", DefaultTypoChance)
     Global TypoDelay      := IniRead(IniFile, "Settings", "TypoDelay", DefaultTypoDelay)
+    Global RevisionChance := IniRead(IniFile, "Settings", "RevisionChance", DefaultRevChance)
     Global SentencePause  := IniRead(IniFile, "Advanced", "SentencePauseMs", DefaultSentencePause)
     Global ParagraphPause := IniRead(IniFile, "Advanced", "ParagraphPauseMs", DefaultParagraphPause)
     Global BrainstormFreq := IniRead(IniFile, "Advanced", "BrainstormFrequency", DefaultBrainstormFreq)
@@ -116,7 +119,7 @@ LoadSettings() {
 }
 
 ; -------------------------------------------------------------------------
-; GLOBAL HOTKEYS (Alt + Arrows)
+; GLOBAL HOTKEYS
 ; -------------------------------------------------------------------------
 !Up::CycleHUD(1)
 !Down::CycleHUD(-1)
@@ -130,17 +133,15 @@ LoadSettings() {
 {
     Global IsPaused, IsRunning, LastEscTime
     
-    ; --- TOGGLE PAUSE IF ALREADY RUNNING ---
     if (IsRunning) {
         IsPaused := !IsPaused
         return
     }
 
-    ; --- START NEW TYPING SESSION ---
     if !A_Clipboard
         return
 
-    IsRunning := true  ; Lock the function
+    IsRunning := true
     
     KeyWait "Ctrl"
     KeyWait "Shift"
@@ -153,20 +154,11 @@ LoadSettings() {
     TextToType := StrReplace(A_Clipboard, "`r`n", "`n")
     TotalLen := StrLen(TextToType)
 
-    if (TotalLen > 5000) {
-        if (MsgBox("Type " TotalLen " chars?", "Large Paste", "YesNo IconExclamation") = "No") {
-            IsRunning := false
-            return
-        }
-    }
-
-    ; --- SETUP KEYBOARD BLOCKER & HUD WATCHER ---
     Blocker := InputHook("L0")
     Blocker.MinSendLevel := 2 
-    Blocker.KeyOpt("{All}", "S")        ; Suppress (Block) all keys it sees
-    Blocker.KeyOpt("{Esc}", "-S")       ; Explicitly allow Esc (Cancel/Unlock)
+    Blocker.KeyOpt("{All}", "S")
+    Blocker.KeyOpt("{Esc}", "-S")
 
-    ; Callback to intercept Alt+Arrows even while the keyboard is blocked
     Blocker.OnKeyDown := (ih, vk, sc) => (
         (GetKeyState("Alt", "P")) ? (
             (GetKeyName(Format("vk{:x}sc{:x}", vk, sc)) = "Up")    ? CycleHUD(1) :
@@ -182,55 +174,48 @@ LoadSettings() {
     CurrentMomentum := 0
     IsPaused := false
     LastEscTime := 0
+    CurrentWordBuffer := "" 
+    WordsTypedInSentence := 0 ; NEW: Tracks position in sentence
     i := 1
     
     While (i <= TotalLen)
     {
         ; --- PAUSE LOGIC ---
         if (IsPaused) {
-            Blocker.Stop() ; Re-enable keyboard so user can type/fix things
-            ToolTip("⏸️ PAUSED (Press Ctrl+Alt+V to Resume, Esc to Cancel)")
-            
+            Blocker.Stop()
+            ToolTip("⏸️ PAUSED")
             While (IsPaused) {
-                ; HANDLE ESCAPE WHILE PAUSED (Double Tap Check)
                 if GetKeyState("Esc", "P") { 
                     if (A_TickCount - LastEscTime < 500) {
-                        ; Double Tap Detected -> CANCEL
                         ToolTip("🔴 CANCELLED")
                         SetTimer () => ToolTip(), -2000
                         IsRunning := false
                         return
                     }
-                    ; Update time to track potential double tap
                     LastEscTime := A_TickCount
                     KeyWait "Esc" 
                 }
                 Sleep 50
             }
-            
-            ; Resuming
             ToolTip("▶️ RESUMING...")
             SetTimer () => ToolTip(), -1000
-            WinActivate(TargetWin) ; Ensure we are back in the window
-            Blocker.Start() ; Re-block keyboard
+            WinActivate(TargetWin)
+            Blocker.Start()
         }
 
-        ; --- ESCAPE LOGIC (PAUSE OR CANCEL) ---
         if GetKeyState("Esc", "P") {
             CurrentTime := A_TickCount
             if (CurrentTime - LastEscTime < 500) {
-                ; Double Tap Detected -> CANCEL
                 Blocker.Stop()
                 ToolTip("🔴 CANCELLED")
                 SetTimer () => ToolTip(), -2000
                 IsRunning := false
                 return
             } else {
-                ; Single Tap Detected -> PAUSE
                 IsPaused := true
                 LastEscTime := CurrentTime
-                KeyWait "Esc" ; Wait for release
-                continue ; Restart loop to enter Pause state immediately
+                KeyWait "Esc"
+                continue
             }
         }
 
@@ -246,45 +231,36 @@ LoadSettings() {
         if (CharCode < 128 && Char != " " && Char != "`n" && Random(1, 100) <= TypoChance)
         {
             Neighbor := GetNeighbor(Char, NeighborMap)
-            
-            ; Only proceed if we found a valid neighbor key to "fat finger"
             if (Neighbor != "") {
-                ; Determine how many characters we type before "noticing" the error (0 to 3)
                 RealizationDelay := Random(0, 3) 
-                
-                ; Don't overrun the text length
                 if (i + RealizationDelay >= TotalLen)
                     RealizationDelay := 0
 
-                ; 1. Type the WRONG character first
                 HumanKeystroke(Neighbor) 
+                CurrentWordBuffer .= Neighbor
                 
-                ; 2. Type the "Buffer" characters (we haven't realized the error yet)
                 Loop RealizationDelay {
                     BufferChar := SubStr(TextToType, i + A_Index, 1)
                     HumanKeystroke(BufferChar)
-                    ; Standard spacing between these oblivious characters
+                    CurrentWordBuffer .= BufferChar
                     Sleep GaussianRandom(UserMeanDelay, UserVariance)
                 }
 
-                ; 3. THE "OH CRAP" MOMENT (Pause)
                 Sleep Random(TypoDelay * 2, TypoDelay * 4) 
 
-                ; 4. Rapidly Backspace (Faster than normal typing)
                 Loop (RealizationDelay + 1) {
                     SendEvent "{Backspace}"
-                    Sleep Random(30, 60) ; Fast distinct backspaces
+                    CurrentWordBuffer := SubStr(CurrentWordBuffer, 1, StrLen(CurrentWordBuffer)-1)
+                    Sleep Random(30, 60)
                 }
                 
-                Sleep Random(100, 200) ; Brief reset pause
-                CurrentMomentum := 0   ; Momentum destroyed by error
-                
-                ; We do NOT increment 'i' here. We loop back and try the original char again.
+                Sleep Random(100, 200)
+                CurrentMomentum := 0
                 continue 
             }
         }
 
-        ; --- A. EMOJI & UNICODE (WITH PAUSE) ---
+        ; --- A. EMOJI & UNICODE ---
         if (CharCode >= 0xD800 && CharCode <= 0xDBFF) {
             Sleep Random(EmojiPause, EmojiPause + 500)
             FullEmoji := SubStr(TextToType, i, 2)
@@ -292,16 +268,80 @@ LoadSettings() {
             Sleep UserMeanDelay
             CurrentMomentum := 0 
             i += 2 
+            CurrentWordBuffer := "" 
             continue
         }
 
         NextChar := (i < TotalLen) ? SubStr(TextToType, i+1, 1) : ""
 
-        ; --- B. COGNITIVE PAUSES ---
+        ; -----------------------------------------------------------------------
+        ; REVISION LOGIC (UPDATED WITH SENTENCE POSITION & SPECIFIC TIMING)
+        ; -----------------------------------------------------------------------
+        IsSeparator := (Char = " " || Char = "." || Char = "," || Char = "!" || Char = "?" || Char = "`n" || Char = "`t" || Char = ";" || Char = ":")
+        IsRevisionTrigger := (Char = " ")
+        
+        if (IsRevisionTrigger && StrLen(CurrentWordBuffer) > 3) {
+            ; CALCULATE DYNAMIC CHANCE BASED ON SENTENCE POSITION
+            CurrentRevChance := RevisionChance
+            
+            if (WordsTypedInSentence < 2) {
+                ; High chance at start of sentence (Finding the right start)
+                CurrentRevChance := RevisionChance * 2 
+            } else if (WordsTypedInSentence > 6) {
+                ; Low chance in middle/end (Flow state)
+                CurrentRevChance := Floor(RevisionChance / 2)
+            }
+
+            if (Random(1, 100) <= CurrentRevChance) {
+                ; 1. THE "SUDDEN STOP" (Word Doubt) - User requested 400-800ms
+                Sleep Random(400, 800) 
+
+                ; 2. DELETE THE WORD
+                Loop StrLen(CurrentWordBuffer) {
+                    SendEvent "{Backspace}"
+                    Sleep Random(40, 70)
+                }
+                CurrentWordBuffer := "" 
+
+                ; 3. THE "RESET" PAUSE (Cognitive Reload) - User requested 600-1200ms
+                Sleep Random(600, 1200)
+
+                ; 4. RETYPE THE WORD
+                WordStart := i - 1
+                Loop {
+                    CheckChar := SubStr(TextToType, WordStart, 1)
+                    if (CheckChar = " " || CheckChar = "`n" || CheckChar = "`t" || WordStart < 1) {
+                        WordStart++ 
+                        break
+                    }
+                    WordStart--
+                }
+                WordToRetype := SubStr(TextToType, WordStart, i - WordStart)
+
+                Loop Parse, WordToRetype {
+                    HumanKeystroke(A_LoopField)
+                    Sleep GaussianRandom(UserMeanDelay, UserVariance)
+                }
+                CurrentMomentum := 0 
+            }
+            CurrentWordBuffer := "" 
+            WordsTypedInSentence++ ; Increment word count
+        }
+        else if (IsSeparator) {
+            CurrentWordBuffer := ""
+            if (Char != " ") 
+                WordsTypedInSentence++
+        }
+        else {
+            CurrentWordBuffer .= Char 
+        }
+
+        ; --- B. COGNITIVE PAUSES & SENTENCE RESET ---
         if (Char = "." || Char = "?" || Char = "!") && (NextChar = " " || NextChar = "`n") {
             HumanKeystroke(Char)
             Sleep Random(SentencePause, SentencePause + 400) 
             CurrentMomentum := 0 
+            WordsTypedInSentence := 0 ; RESET SENTENCE COUNTER
             i++
             continue
         }
@@ -324,6 +364,7 @@ LoadSettings() {
             SendEvent "+{Enter}"
             Sleep Random(ParagraphPause, ParagraphPause + 1000) 
             CurrentMomentum := 0
+            WordsTypedInSentence := 0 ; RESET SENTENCE COUNTER
         } else if (Char = "`t") {
             SendEvent "{Tab}"
             Sleep Random(50, 100)
@@ -348,26 +389,13 @@ LoadSettings() {
         i++ 
     }
 
-    ; -------------------------------------------------------------------------
-    ; CLEANUP & CONFIRMATION
-    ; -------------------------------------------------------------------------
-    ; The keyboard is STILL blocked here (InputHook is running).
-    ; We force the user to press ESC to prove they are ready to take control.
-    
     ToolTip("✅ DONE`n🔒 Keyboard still locked.`n👉 Press [ESC] to unlock.")
-    SoundBeep 600, 150 ; Small audible cue
-
-    ; Wait for the user to press ESC to finish the script
+    SoundBeep 600, 150 
     KeyWait "Esc", "D" 
     KeyWait "Esc"
-    
-    Blocker.Stop() ; Stop blocking keys
-    
-    ; --- SAFETY RELEASE ---
-    ; Force release all modifier keys to ensure nothing gets stuck down physically/logically.
+    Blocker.Stop() 
     SendEvent "{LCtrl up}{RCtrl up}{LAlt up}{RAlt up}{LShift up}{RShift up}{LWin up}{RWin up}"
-    
-    IsRunning := false ; Reset running state
+    IsRunning := false 
     ToolTip("🔓 KEYBOARD UNLOCKED")
     SetTimer () => ToolTip(), -2000
 }
@@ -375,19 +403,10 @@ LoadSettings() {
 ; -------------------------------------------------------------------------
 ; HELPERS
 ; -------------------------------------------------------------------------
-
-; FEATURE A: REALISTIC KEY DWELL TIME (TUNED FOR LIGHT TOUCH)
 HumanKeystroke(Char) {
-    ; 1. Calculate realistic "Hold Time" (Dwell)
     DwellTime := Random(10, 40)
-    
-    ; 2. Apply this to the keystroke
-    ; SetKeyDelay: Delay, PressDuration
     SetKeyDelay 0, DwellTime
-    
-    ; 3. Handle Special Shift Logic (Shift Overlap)
     if IsUpper(Char) && Char != " " {
-        ; Sometimes humans hold Shift a bit too long
         if (Random(1, 10) > 7)
             SetKeyDelay 0, DwellTime + Random(20, 50)
     }
@@ -408,8 +427,6 @@ HumanKeystroke(Char) {
         SendEvent "{#}"
     else
         SendEvent "{Raw}" Char
-        
-    ; Reset to default safe values
     SetKeyDelay 10, 10
 }
 
@@ -457,7 +474,6 @@ GetNeighbor(key, MapToUse) {
 }
 
 InitializeLayouts() {
-    ; QWERTY (Numbers isolated from letters)
     LayoutMaps["QWERTY"] := Map(
         "q","wa", "w","qase", "e","wsdr", "r","edft", "t","rfgy", "y","tghu", "u","yhji", "i","ujko", "o","iklp", "p","ol",
         "a","qwsz", "s","qweadzx", "d","wersfcx", "f","ertdgvc", "g","rtyfhvb", "h","tyugjbn", "j","yuihkmn", "k","uiojlm,", "l","iopk;",
@@ -465,8 +481,6 @@ InitializeLayouts() {
         "1","2", "2","13", "3","24", "4","35", "5","46", "6","57", "7","68", "8","79", "9","80", "0","9-", "-","0=", "=","-",
         " "," "
     )
-
-    ; QWERTZ (German)
     LayoutMaps["QWERTZ"] := Map(
         "q","wa", "w","qase", "e","wsdr", "r","edft", "t","rfgy", "z","tghu", "u","zhji", "i","ujko", "o","iklp", "p","olü",
         "a","qwsy", "s","qweadzy", "d","wersfcx", "f","ertdgvc", "g","rtyfhvb", "h","tzugjbn", "j","zuihkmn", "k","uiojlm,", "l","iopkö",
@@ -474,8 +488,6 @@ InitializeLayouts() {
         "1","2", "2","13", "3","24", "4","35", "5","46", "6","57", "7","68", "8","79", "9","80", "0","9ß", "ß","0",
         " "," "
     )
-
-    ; AZERTY (French)
     LayoutMaps["AZERTY"] := Map(
         "a","zq", "z","azse", "e","zsdr", "r","edft", "t","rfgy", "y","tghu", "u","yhji", "i","ujko", "o","iklp", "p","olm",
         "q","awsw", "s","aqzedxw", "d","zersfcx", "f","ertdgvc", "g","rtyfhvb", "h","tyugjbn", "j","yuihk,n", "k","uiojlm;", "l","iopk:!",
