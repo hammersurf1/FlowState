@@ -69,16 +69,29 @@ CycleHUD(Direction) {
 AdjustHUD(Direction) {
     Global UserMeanDelay, UserVariance, TypoChance, TypoDelay, RevisionChance, CurrentSettingIndex
     CurrentVar := SettingsList[CurrentSettingIndex]
-    CurrentVal := %CurrentVar%
-    Step := (CurrentVar = "TypoChance" || CurrentVar = "RevisionChance") ? 1 : (CurrentVar = "TypoDelay") ? 25 : 5
-
-    if (Direction > 0)
-        %CurrentVar% := CurrentVal + Step
-    else
-        %CurrentVar% := CurrentVal - Step
     
-    if (%CurrentVar% < 0)
-        %CurrentVar% := 0
+    CurrentVal := 0
+    Switch CurrentVar {
+        Case "UserMeanDelay": CurrentVal := UserMeanDelay
+        Case "UserVariance": CurrentVal := UserVariance
+        Case "TypoChance": CurrentVal := TypoChance
+        Case "TypoDelay": CurrentVal := TypoDelay
+        Case "RevisionChance": CurrentVal := RevisionChance
+    }
+
+    Step := (CurrentVar = "TypoChance" || CurrentVar = "RevisionChance") ? 1 : (CurrentVar = "TypoDelay") ? 25 : 5
+    NewVal := CurrentVal + (Direction > 0 ? Step : -Step)
+    
+    if (NewVal < 0)
+        NewVal := 0
+        
+    Switch CurrentVar {
+        Case "UserMeanDelay": UserMeanDelay := NewVal
+        Case "UserVariance": UserVariance := NewVal
+        Case "TypoChance": TypoChance := NewVal
+        Case "TypoDelay": TypoDelay := NewVal
+        Case "RevisionChance": RevisionChance := NewVal
+    }
         
     SaveSettings()
     ShowHUD()
@@ -86,8 +99,19 @@ AdjustHUD(Direction) {
 
 ShowHUD() {
     Global CurrentSettingIndex, SettingsList, SettingNames, DefaultsMap
+    Global UserMeanDelay, UserVariance, TypoChance, TypoDelay, RevisionChance
+
     CurrentVar := SettingsList[CurrentSettingIndex]
-    CurrentVal := %CurrentVar%
+    CurrentVal := 0
+    
+    Switch CurrentVar {
+        Case "UserMeanDelay": CurrentVal := UserMeanDelay
+        Case "UserVariance": CurrentVal := UserVariance
+        Case "TypoChance": CurrentVal := TypoChance
+        Case "TypoDelay": CurrentVal := TypoDelay
+        Case "RevisionChance": CurrentVal := RevisionChance
+    }
+
     FriendlyName := SettingNames[CurrentSettingIndex]
     DefaultVal := DefaultsMap[CurrentVar]
     ToolTip("⚙️ SETTING: " FriendlyName "`nVALUE: " CurrentVal "  (Default: " DefaultVal ")`n(Use Alt+Left/Right to adjust)")
@@ -248,11 +272,12 @@ LoadSettings() {
 
                 Sleep Random(TypoDelay * 2, TypoDelay * 4) 
 
+                SetKeyDelay Random(30, 60), 10
                 Loop (RealizationDelay + 1) {
                     SendEvent "{Backspace}"
                     CurrentWordBuffer := SubStr(CurrentWordBuffer, 1, StrLen(CurrentWordBuffer)-1)
-                    Sleep Random(30, 60)
                 }
+                SetKeyDelay 10, 10
                 
                 Sleep Random(100, 200)
                 CurrentMomentum := 0
@@ -297,10 +322,11 @@ LoadSettings() {
                 Sleep Random(400, 800) 
 
                 ; 2. DELETE THE WORD
+                SetKeyDelay Random(40, 70), 10
                 Loop StrLen(CurrentWordBuffer) {
                     SendEvent "{Backspace}"
-                    Sleep Random(40, 70)
                 }
+                SetKeyDelay 10, 10
                 CurrentWordBuffer := "" 
 
                 ; 3. THE "RESET" PAUSE (Cognitive Reload) - User requested 600-1200ms
@@ -411,22 +437,7 @@ HumanKeystroke(Char) {
             SetKeyDelay 0, DwellTime + Random(20, 50)
     }
 
-    if (Char = "{")
-        SendEvent "{{}"
-    else if (Char = "}")
-        SendEvent "{}}"
-    else if (Char = "+")
-        SendEvent "{+}"
-    else if (Char = "^")
-        SendEvent "{^}"
-    else if (Char = "%")
-        SendEvent "{%}"
-    else if (Char = "!")
-        SendEvent "{!}"
-    else if (Char = "#")
-        SendEvent "{#}"
-    else
-        SendEvent "{Raw}" Char
+    SendEvent "{Text}" Char
     SetKeyDelay 10, 10
 }
 
@@ -439,9 +450,11 @@ SurgicalPaste(Content) {
 }
 
 GaussianRandom(Mean, StdDev) {
-    RandSum := Random(0.0, 1.0) + Random(0.0, 1.0) + Random(0.0, 1.0)
-    StandardNormal := (RandSum - 1.5) / 0.5 
-    Return Floor(Mean + (StandardNormal * StdDev))
+    u1 := Random(0.0000001, 1.0) ; Prevent Log(0)
+    u2 := Random(0.0, 1.0)
+    ; Box-Muller transform
+    z0 := Sqrt(-2.0 * Log(u1)) * Cos(2.0 * 3.141592653589793 * u2)
+    Return Floor(Mean + (z0 * StdDev))
 }
 
 DetectKeyboardLayout(WinID) {
