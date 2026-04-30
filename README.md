@@ -4,7 +4,8 @@
 [![Forks][forks-shield]][forks-url]
 [![Stargazers][stars-shield]][stars-url]
 [![Issues][issues-shield]][issues-url]
-[![MIT License][license-shield]][license-url]
+![GitHub License](https://img.shields.io/github/license/hammersurf1/FlowState?style=for-the-badge)
+
 
 <!-- PROJECT LOGO -->
 <br />
