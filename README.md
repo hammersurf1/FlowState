@@ -107,16 +107,29 @@ You will need Python 3.x installed.
 <!-- USAGE EXAMPLES -->
 ## Usage
 
-1. **Copy text** to your clipboard (`Ctrl + C`).
-2. **Place your cursor** in the target text field.
-3. Press **`Ctrl + Alt + V`** to start the typing simulation.
+1. **Copy text** to your clipboard (`Ctrl+C` / `Cmd+C`).
+2. **Click into** the target text field.
+3. Press **`Ctrl+Alt+V`**. A 3-second countdown lets you release the hotkey before typing starts.
 
 ### Controls
-* **Ctrl + Alt + V:** Start / Pause / Resume typing.
-* **Esc:** Pause immediately.
-* **Esc (Double-tap):** Abort and reset.
-* **Alt + ↑ / ↓:** Cycle through settings (Speed, Variance, Typo Chance, etc.).
-* **Alt + ← / →:** Adjust the selected setting value in real-time.
+
+| Hotkey | Action |
+|---|---|
+| `Ctrl+Alt+V` | Start / Pause / Resume |
+| `Esc` | Pause immediately |
+| `Esc` (double-tap, <0.5s) | Abort and reset |
+| `Ctrl+Shift+Alt+↑` / `Ctrl+Shift+Alt+↓` | Cycle through settings |
+| `Ctrl+Shift+Alt+→` / `Ctrl+Shift+Alt+←` | Adjust selected setting |
+
+### System tray HUD
+
+The icon gives a live status readout. It shows the active setting's short name and current value (e.g. `SPD 35`).
+
+| Icon color | Meaning |
+|---|---|
+| 🔵 Blue | Idle |
+| 🟢 Green | Typing / countdown |
+| 🟠 Orange | Paused |
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
