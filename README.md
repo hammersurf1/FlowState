@@ -1,11 +1,14 @@
 <a id="readme-top"></a>
 
+<div align="center">
+
 [![Contributors][contributors-shield]][contributors-url]
 [![Forks][forks-shield]][forks-url]
 [![Stargazers][stars-shield]][stars-url]
 [![Issues][issues-shield]][issues-url]
 ![GitHub License](https://img.shields.io/github/license/hammersurf1/FlowState?style=for-the-badge)
 
+</div>
 
 <!-- PROJECT LOGO -->
 <br />
