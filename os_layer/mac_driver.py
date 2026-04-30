@@ -51,10 +51,11 @@ class MacDriver:
     def register_hotkeys(self, engine):
         mapping = {
             '<ctrl>+<alt>+v': lambda: threading.Thread(target=engine.trigger_typing, daemon=True).start(),
-            '<alt>+<up>': lambda: engine.cycle_hud(1),
-            '<alt>+<down>': lambda: engine.cycle_hud(-1),
-            '<alt>+<right>': lambda: engine.adjust_hud(1),
-            '<alt>+<left>': lambda: engine.adjust_hud(-1),
+            # CHANGED: Now requires Shift to be held down as well
+            '<ctrl>+<alt>+<shift>+<up>': lambda: engine.cycle_hud(1),
+            '<ctrl>+<alt>+<shift>+<down>': lambda: engine.cycle_hud(-1),
+            '<ctrl>+<alt>+<shift>+<right>': lambda: engine.adjust_hud(1),
+            '<ctrl>+<alt>+<shift>+<left>': lambda: engine.adjust_hud(-1),
             '<esc>': engine.handle_esc
         }
         

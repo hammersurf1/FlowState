@@ -1,41 +1,19 @@
 import pystray
 from pystray import MenuItem as item
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 import sys
 
 from engine import TypingEngine
 from os_layer import get_driver
 
-SHORT_NAMES = {
-    "UserMeanDelay": "SPD",
-    "UserVariance": "VAR",
-    "TypoChance": "ERR",
-    "TypoDelay": "FIX",
-    "RevisionChance": "REV"
-}
-
-def create_image(color, top_text="", bottom_text=""):
-    """Generates a dynamic 64x64 colored square with text drawn directly on it"""
+def create_image(color):
+    """Generates a clean 64x64 colored circle to represent state"""
     image = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     
-    draw.rectangle((2, 2, 62, 62), fill=color, outline="white", width=2)
+    # Draw a nice anti-aliased circle
+    draw.ellipse((8, 8, 56, 56), fill=color, outline="white", width=3)
     
-    if top_text or bottom_text:
-        try:
-            font_top = ImageFont.load_default(size=18)
-            font_bot = ImageFont.load_default(size=26)
-        except TypeError:
-            font_top = ImageFont.load_default()
-            font_bot = ImageFont.load_default()
-
-        if top_text:
-            draw.text((32, 20), top_text, fill="white", font=font_top, anchor="mm")
-        if bottom_text:
-            if top_text in ["ERR", "REV"]:
-                bottom_text = f"{bottom_text}%"
-            draw.text((32, 46), str(bottom_text), fill="white", font=font_bot, anchor="mm")
-
     return image
 
 def main():
@@ -44,37 +22,35 @@ def main():
         engine = TypingEngine(driver)
         driver.register_hotkeys(engine)
         
-        tray_icon = pystray.Icon("AutoTyper", create_image("blue"), "AutoTyper: Idle")
+        tray_icon = pystray.Icon("AutoTyper", create_image("#0078D7"), "AutoTyper: Idle")
 
         def update_tray(*args):
             var_name = engine.settings_list[engine.current_setting_index]
             val = engine.settings[var_name]
             friendly = engine.setting_names[engine.current_setting_index]
-            short_name = SHORT_NAMES.get(var_name, "SET")
             
             # --- 1. UPDATE VISUAL ICON ---
-            color = "blue"
+            color = "#0078D7" # Blue
+            status_text = "Idle"
             
-            # If counting down, show RDY + Number
             if engine.is_running and engine.countdown > 0:
-                color = "green"
-                short_name = "RDY"
-                val = engine.countdown
+                color = "#FFB900" # Yellow
+                status_text = f"Starting in {engine.countdown}..."
             elif engine.is_running and not engine.is_paused:
-                color = "green"
+                color = "#107C10" # Green
+                status_text = "Running"
             elif engine.is_paused:
-                color = "orange"
+                color = "#D83B01" # Orange
+                status_text = "Paused"
                 
-            tray_icon.icon = create_image(color, top_text=short_name, bottom_text=val)
+            tray_icon.icon = create_image(color)
 
             # --- 2. UPDATE HOVER TEXT ---
-            tray_icon.title = f"AutoTyper\n{friendly}: {val}"
+            tray_icon.title = f"AutoTyper ({status_text})\n{friendly}: {val}"
 
             # --- 3. UPDATE RIGHT-CLICK MENU ---
             menu_items =[]
-            status_text = "Status: Running" if engine.is_running and not engine.is_paused else \
-                          "Status: Paused" if engine.is_paused else "Status: Idle"
-            menu_items.append(item(status_text, lambda: None, enabled=False))
+            menu_items.append(item(f"Status: {status_text}", lambda: None, enabled=False))
             menu_items.append(item("---", lambda: None, enabled=False))
 
             for i, v_name in enumerate(engine.settings_list):

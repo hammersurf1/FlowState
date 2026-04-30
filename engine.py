@@ -3,6 +3,77 @@ import random
 import configparser
 import os
 from pathlib import Path
+import subprocess
+import sys
+
+OSD_SCRIPT = """
+import tkinter as tk
+import sys
+import threading
+import queue
+
+q = queue.Queue()
+
+def read_stdin():
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            q.put("EXIT_OSD")
+            break
+        q.put(line.strip())
+
+threading.Thread(target=read_stdin, daemon=True).start()
+
+def check_queue():
+    try:
+        while True:
+            msg = q.get_nowait()
+            if msg == "EXIT_OSD":
+                root.destroy()
+                return
+            label.config(text=msg)
+            root.deiconify()
+            try:
+                root.attributes("-alpha", 0.85)
+            except:
+                pass
+            root.update_idletasks()
+            w = root.winfo_width()
+            sw = root.winfo_screenwidth()
+            sh = root.winfo_screenheight()
+            
+            # Positioned nicely in the lower-middle of the screen
+            root.geometry(f"+{(sw-w)//2}+{sh-150}")
+            
+            if hasattr(root, 'hide_timer') and root.hide_timer:
+                root.after_cancel(root.hide_timer)
+            root.hide_timer = root.after(2000, hide_osd)
+    except queue.Empty:
+        pass
+    root.after(50, check_queue)
+
+def hide_osd():
+    try:
+        root.attributes("-alpha", 0.0)
+    except:
+        pass
+    root.withdraw()
+
+root = tk.Tk()
+root.overrideredirect(True)
+root.attributes("-topmost", True)
+try:
+    root.attributes("-alpha", 0.0) # Start invisible
+except:
+    pass
+root.configure(bg='#1e1e1e')
+label = tk.Label(root, text="", fg='#ffffff', bg='#1e1e1e', font=('Arial', 22, 'bold'), padx=30, pady=15)
+label.pack()
+
+hide_osd()
+root.after(50, check_queue)
+root.mainloop()
+"""
 
 LAYOUTS = {
     "QWERTY": {
@@ -26,16 +97,9 @@ LAYOUTS = {
 }
 
 COMMON_TYPOS = {
-    "the": ["teh"],
-    "and": ["adn"],
-    "that": ["taht"],
-    "because": ["becuase", "becaus"],
-    "definitely": ["definately"],
-    "separate": ["seperate"],
-    "a lot":["alot"],
-    "receive": ["recieve"],
-    "their": ["thier", "there"],
-    "you're": ["your"]
+    "the": ["teh"], "and": ["adn"], "that": ["taht"], "because": ["becuase", "becaus"],
+    "definitely": ["definately"], "separate": ["seperate"], "a lot":["alot"],
+    "receive": ["recieve"], "their": ["thier", "there"], "you're":["your"]
 }
 
 class TypingEngine:
@@ -54,7 +118,7 @@ class TypingEngine:
         self.settings = self.defaults.copy()
         self.load_settings()
 
-        self.settings_list =["UserMeanDelay", "UserVariance", "TypoChance", "TypoDelay", "RevisionChance"]
+        self.settings_list = ["UserMeanDelay", "UserVariance", "TypoChance", "TypoDelay", "RevisionChance"]
         self.setting_names =["Typing Speed (Lower is Faster)", "Variance", "Typo Chance (%)", "Typo Correction Speed", "Base Revision Chance (%)"]
         self.current_setting_index = 0
 
@@ -66,6 +130,32 @@ class TypingEngine:
 
         self.ui_update_callback = None
         self.status_callback = None
+
+        # --- Launch OSD Overlay Server ---
+        self.osd_process = None
+        try:
+            kwargs = {}
+            if os.name == 'nt':
+                # Prevent a Windows console pop-up behind the UI
+                kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+                
+            self.osd_process = subprocess.Popen(
+                [sys.executable, '-c', OSD_SCRIPT],
+                stdin=subprocess.PIPE,
+                text=True,
+                **kwargs
+            )
+        except Exception as e:
+            print(f"Failed to start OSD overlay: {e}")
+
+    def show_osd(self, message):
+        """Sends a message directly to the hidden background UI without blocking macro execution."""
+        if self.osd_process and self.osd_process.poll() is None:
+            try:
+                self.osd_process.stdin.write(message + "\n")
+                self.osd_process.stdin.flush()
+            except Exception:
+                pass
 
     def load_settings(self):
         if self.ini_file.exists():
@@ -96,6 +186,11 @@ class TypingEngine:
 
     def cycle_hud(self, direction):
         self.current_setting_index = (self.current_setting_index + direction) % len(self.settings_list)
+        friendly = self.setting_names[self.current_setting_index]
+        val = self.settings[self.settings_list[self.current_setting_index]]
+        
+        self.show_osd(f"{friendly}: {val}")
+        
         if self.ui_update_callback:
             self.ui_update_callback()
 
@@ -108,12 +203,36 @@ class TypingEngine:
             self.settings[var_name] = 0
             
         self.save_settings()
+        
+        friendly = self.setting_names[self.current_setting_index]
+        val = self.settings[var_name]
+        self.show_osd(f"{friendly}: {val}")
+        
         if self.ui_update_callback:
             self.ui_update_callback()
 
     def set_state(self, running=None, paused=None):
-        if running is not None: self.is_running = running
-        if paused is not None: self.is_paused = paused
+        changed = False
+        was_running = self.is_running
+        was_paused = self.is_paused
+
+        if running is not None and self.is_running != running:
+            self.is_running = running
+            changed = True
+        if paused is not None and self.is_paused != paused:
+            self.is_paused = paused
+            changed = True
+            
+        if changed:
+            if self.is_running and self.is_paused:
+                self.show_osd("AutoTyper: Paused ⏸")
+            elif self.is_running and not self.is_paused and not was_running:
+                pass # Countdown will organically handle "Starting..."
+            elif self.is_running and not self.is_paused and was_running and was_paused:
+                self.show_osd("AutoTyper: Resumed ▶")
+            elif not self.is_running and was_running:
+                self.show_osd("AutoTyper: Stopped ⏹")
+
         if self.status_callback:
             self.status_callback()
 
@@ -131,10 +250,11 @@ class TypingEngine:
         # Lock in running state
         self.set_state(running=True, paused=False)
 
-        # COUNTDOWN LOOP: Give user time to let go of Ctrl & Alt
+        # COUNTDOWN LOOP
         for i in range(3, 0, -1):
-            if not self.is_running: return # Aborted via Esc
+            if not self.is_running: return 
             self.countdown = i
+            self.show_osd(f"Starting in {i}...")
             if self.ui_update_callback: self.ui_update_callback()
             time.sleep(0.5)
 
@@ -142,6 +262,8 @@ class TypingEngine:
         if self.ui_update_callback: self.ui_update_callback()
         
         if not self.is_running: return
+
+        self.show_osd("AutoTyper: Running ▶")
 
         # Actually grab the keyboard
         self.driver.start_blocker()
@@ -169,8 +291,8 @@ class TypingEngine:
             char_code = ord(char)
             next_char = clipboard_text[i+1] if i + 1 < total_len else ""
 
-            # --- COGNITIVE TYPO LOGIC (Look-ahead substitution) ---
-            if (i == 0 or clipboard_text[i-1] in [" ", "\n", "\t"]) and char.isalpha() and not just_corrected_word:
+            # --- COGNITIVE TYPO LOGIC ---
+            if (i == 0 or clipboard_text[i-1] in[" ", "\n", "\t"]) and char.isalpha() and not just_corrected_word:
                 word_end = i
                 while word_end < total_len and clipboard_text[word_end].isalpha():
                     word_end += 1
@@ -198,15 +320,14 @@ class TypingEngine:
                     just_corrected_word = True
                     continue
 
-            # Clear flag if we aren't at the start of a word anymore
             if not char.isalpha() or (i > 0 and clipboard_text[i-1] not in [" ", "\n", "\t"]):
                 just_corrected_word = False
 
-            # --- START OF INTELLIGENT TYPO LOGIC ---
+            # --- INTELLIGENT TYPO LOGIC ---
             if char_code < 128 and char not in [" ", "\n", "\t"] and random.randint(1, 100) <= self.settings["TypoChance"]:
                 
                 weights = self._get_typo_weights(char, next_char, self.current_momentum, neighbor_map)
-                choices = ["spatial", "transposition", "omission", "doubling"]
+                choices =["spatial", "transposition", "omission", "doubling"]
                 
                 typo_type = random.choices(choices, weights=weights, k=1)[0]
 
@@ -254,8 +375,8 @@ class TypingEngine:
                 time.sleep(random.randint(100, 200) / 1000.0)
                 self.current_momentum = 0
                 continue
-            # --- END OF INTELLIGENT TYPO LOGIC ---
 
+            # --- NORMAL TYPING EXECUTION ---
             if 0xD800 <= char_code <= 0xDBFF or char_code > 0xFFFF:
                 time.sleep(random.randint(self.settings["EmojiPauseMs"], self.settings["EmojiPauseMs"] + 500) / 1000.0)
                 self.driver.surgical_paste(char)
@@ -265,7 +386,7 @@ class TypingEngine:
                 i += 1
                 continue
 
-            is_separator = char in [" ", ".", ",", "!", "?", "\n", "\t", ";", ":"]
+            is_separator = char in[" ", ".", ",", "!", "?", "\n", "\t", ";", ":"]
 
             if is_separator:
                 if char == " ":
@@ -360,7 +481,7 @@ class TypingEngine:
         if not self._get_neighbor(char, neighbor_map):
             weights["spatial"] = 0
 
-        if not next_char or next_char in [" ", "\n", "\t"]:
+        if not next_char or next_char in[" ", "\n", "\t"]:
             weights["transposition"] = 0
         else:
             if momentum > 10:
