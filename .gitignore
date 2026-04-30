@@ -13,3 +13,6 @@ wheels/
 uv.lock
 pyproject.toml
 .python-version
+
+# Context files
+GEMINI.md
