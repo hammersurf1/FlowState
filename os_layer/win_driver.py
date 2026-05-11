@@ -7,6 +7,7 @@ import threading
 class WinDriver:
     def __init__(self):
         self._block_hook = None
+        self.esc_handler = None # Store the reference to engine.handle_esc
 
     def detect_layout(self):
         user32 = ctypes.windll.user32
@@ -47,21 +48,26 @@ class WinDriver:
         keyboard.send("tab")
 
     def start_blocker(self):
-        # Allow our new 3-modifier combination through the lock
-        allowed =['esc', 'ctrl', 'left ctrl', 'right ctrl', 
+        # We define which keys are allowed to pass through the suppression
+        allowed = ['esc', 'ctrl', 'left ctrl', 'right ctrl', 
                    'shift', 'left shift', 'right shift', 
                    'alt', 'left alt', 'right alt', 
                    'up', 'down', 'left', 'right']
                    
         def block_event(e):
+            # FIX: Manually trigger the ESC handler if ESC is pressed 
+            # while the blocker is active. This is more reliable than add_hotkey.
+            if e.name.lower() == 'esc' and e.event_type == 'down':
+                if self.esc_handler:
+                    # Execute handler in a thread to avoid blocking the hook
+                    threading.Thread(target=self.esc_handler, daemon=True).start()
+            
             return e.name.lower() in allowed
         
         self._block_hook = keyboard.hook(block_event, suppress=True)
         
-        for mod in['ctrl', 'left ctrl', 'right ctrl', 
-                    'alt', 'left alt', 'right alt', 
-                    'shift', 'left shift', 'right shift', 
-                    'windows', 'left windows', 'right windows']:
+        # Ensure modifiers are released so they don't "stick" when blocking starts
+        for mod in ['ctrl', 'alt', 'shift', 'windows']:
             keyboard.release(mod)
 
     def stop_blocker(self):
@@ -70,12 +76,15 @@ class WinDriver:
             self._block_hook = None
 
     def register_hotkeys(self, engine):
+        # Store the engine's escape handler for use in start_blocker
+        self.esc_handler = engine.handle_esc
+
         keyboard.add_hotkey('ctrl+alt+v', lambda: threading.Thread(target=engine.trigger_typing, daemon=True).start())
         
-        # CHANGED: Now requires Shift to be held down as well
         keyboard.add_hotkey('ctrl+alt+shift+up', lambda: engine.cycle_hud(1))
         keyboard.add_hotkey('ctrl+alt+shift+down', lambda: engine.cycle_hud(-1))
         keyboard.add_hotkey('ctrl+alt+shift+right', lambda: engine.adjust_hud(1))
         keyboard.add_hotkey('ctrl+alt+shift+left', lambda: engine.adjust_hud(-1))
         
+        # Keep this for when the blocker is NOT running
         keyboard.add_hotkey('esc', engine.handle_esc)
