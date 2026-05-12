@@ -6,15 +6,15 @@ AppPublisherURL=https://github.com/hammersurf1/FlowState
 AppSupportURL=https://github.com/hammersurf1/FlowState/issues
 DefaultDirName={autopf}\FlowState
 DefaultGroupName=FlowState
-OutputDir=dist
+OutputDir=..\dist
 OutputBaseFilename=FlowState_Windows_Setup
-LicenseFile=LICENSE
+LicenseFile=..\LICENSE
 Compression=lzma
 SolidCompression=yes
 PrivilegesRequired=lowest
 
 [Files]
-Source: "dist\FlowState.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\FlowState.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\FlowState"; Filename: "{app}\FlowState.exe"; IconFilename: "{app}\FlowState.exe"
