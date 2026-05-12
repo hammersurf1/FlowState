@@ -1,0 +1,65 @@
+name: Build Installers
+
+# This allows you to manually trigger the build from the GitHub website
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements_win.txt
+          pip install pyinstaller
+
+      - name: Build Windows EXE
+        run: pyinstaller --noconsole --onefile --name="FlowState" --collect-all playwright src\main_win.py
+
+      - name: Create Windows Installer (Inno Setup)
+        # Inno Setup is conveniently pre-installed on GitHub's Windows cloud servers!
+        run: iscc build_scripts\windows_setup.iss
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlowState-Windows-Installer
+          path: dist/FlowState_Windows_Setup.exe
+
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements_mac.txt
+          pip install pyinstaller
+
+      - name: Build Mac App
+        run: pyinstaller --windowed --onefile --name="FlowState" --collect-all playwright src/main_mac.py
+
+      - name: Create Mac DMG Installer
+        # We use Apple's built-in hdiutil tool to package the .app into a .dmg
+        run: |
+          hdiutil create -volname "FlowState" -srcfolder dist/FlowState.app -ov -format UDZO dist/FlowState_Mac_Installer.dmg
+
+      - name: Upload Mac Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlowState-Mac-Installer
+          path: dist/FlowState_Mac_Installer.dmg

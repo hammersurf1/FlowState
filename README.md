@@ -46,15 +46,15 @@
     <li>
       <a href="#getting-started">Getting Started</a>
       <ul>
-        <li><a href="#prerequisites">Prerequisites</a></li>
-        <li><a href="#installation">Installation</a></li>
+        <li><a href="#option-1-download-the-installer-recommended">Option 1: Installer</a></li>
+        <li><a href="#option-2-manual-setup-clone--zip">Option 2: Manual Setup</a></li>
       </ul>
     </li>
     <li><a href="#usage">Usage</a></li>
+    <li><a href="#transparency">Transparency</a></li>
     <li><a href="#roadmap">Roadmap</a></li>
     <li><a href="#contributing">Contributing</a></li>
     <li><a href="#license">License</a></li>
-    <li><a href="#contact">Contact</a></li>
     <li><a href="#acknowledgments">Acknowledgments</a></li>
   </ol>
 </details>
@@ -84,25 +84,62 @@ FlowState is a cross-platform typing simulator designed for intelligent humanlik
 <!-- GETTING STARTED -->
 ## Getting Started
 
-To get FlowState up and running on your machine, follow these steps.
+FlowState has separate builds for **Windows** and **macOS**. Choose the method that works best for you.
 
-### Prerequisites
+### Option 1: Download the Installer (Recommended)
 
-You will need Python 3.x installed.
+Pre-built installers are available on the [Releases](https://github.com/hammersurf1/FlowState/releases) page.
 
-### Installation
+| Platform | Download | What it does |
+|----------|----------|--------------|
+| **Windows** | `FlowState_Windows_Setup.exe` | Standard Windows installer (Inno Setup). Installs to Program Files, creates Start Menu & desktop shortcuts. |
+| **macOS** | `FlowState_Mac_Installer.dmg` | Standard macOS disk image. Drag `FlowState.app` to your Applications folder. |
 
-1. Clone the repo
+> **Windows Note:** FlowState requires **Administrator** to run because it uses global keyboard hooks (a Windows security requirement).
+>
+> **macOS Note:** On first launch, macOS will ask you to grant **Accessibility** permission (System Settings → Privacy & Security → Accessibility). This is required for global hotkeys and is a standard Apple security prompt.
+
+### Option 2: Manual Setup (Clone / ZIP)
+
+If you prefer to run from source, or you want to inspect exactly what FlowState does:
+
+1. **Clone the repo** (or download the ZIP)
    ```sh
    git clone https://github.com/hammersurf1/FlowState.git
+   cd FlowState
    ```
-2. Install dependencies
+
+2. **Run the setup script for your platform:**
+
+   **Windows:**
    ```sh
-   pip install -r requirements.txt
+   setup_windows.bat
    ```
-3. Run the application
+
+   **macOS:**
    ```sh
-   python main.py
+   chmod +x setup_mac.sh
+   ./setup_mac.sh
+   ```
+
+   The setup scripts will:
+   - Check that Python 3 is installed
+   - Create a virtual environment in `.venv/`
+   - Install dependencies from the platform-specific requirements file
+   - Print clear instructions for running the app
+
+3. **Run FlowState:**
+
+   **Windows** (run as Administrator):
+   ```sh
+   .venv\Scripts\activate
+   python src\main_win.py
+   ```
+
+   **macOS:**
+   ```sh
+   source .venv/bin/activate
+   python3 src/main_mac.py
    ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
@@ -111,28 +148,52 @@ You will need Python 3.x installed.
 ## Usage
 
 1. **Copy text** to your clipboard (`Ctrl+C` / `Cmd+C`).
-2. **Click into** the target text field.
-3. Press **`Ctrl+Alt+V`**. A 3-second countdown lets you release the hotkey before typing starts.
+2. **Click into** the target text field (in Chrome).
+3. Press the trigger hotkey. A 3-second countdown lets you release the hotkey before typing starts.
 
 ### Controls
 
-| Hotkey | Action |
-|---|---|
-| `Ctrl+Alt+V` | Start / Pause / Resume |
-| `Esc` | Pause immediately |
-| `Esc` (double-tap, <0.5s) | Abort and reset |
-| `Ctrl+Shift+Alt+↑` / `Ctrl+Shift+Alt+↓` | Cycle through settings |
-| `Ctrl+Shift+Alt+→` / `Ctrl+Shift+Alt+←` | Adjust selected setting |
+| Hotkey | Windows | macOS |
+|---|---|---|
+| Start / Pause / Resume | `Ctrl+Alt+V` | `⌘+⌥+V` |
+| Pause immediately | `Esc` | `Esc` |
+| Abort and reset | `Esc` (double-tap, <0.5s) | `Esc` (double-tap, <0.5s) |
+| Cycle through settings | `Ctrl+Shift+Alt+↑/↓` | `⌘+⇧+⌥+↑/↓` |
+| Adjust selected setting | `Ctrl+Shift+Alt+→/←` | `⌘+⇧+⌥+→/←` |
 
 ### System tray HUD
 
-The icon gives a live status readout. It shows the active setting's short name and current value (e.g. `SPD 35`).
+The icon gives a live status readout. It shows the active setting's short name and current value.
 
 | Icon color | Meaning |
 |---|---|
 | 🔵 Blue | Idle |
 | 🟢 Green | Typing / countdown |
 | 🟠 Orange | Paused |
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+<!-- TRANSPARENCY -->
+## Transparency
+
+FlowState is fully open-source and designed to be transparent about what it does:
+
+**Why does it need Administrator / Accessibility permissions?**
+- **Windows:** The `keyboard` library requires Administrator to register global hotkeys. This is a Windows security policy — any app that listens for keystrokes system-wide needs elevated privileges.
+- **macOS:** The `pynput` library requires Accessibility permission to register global hotkeys. This is Apple's standard security model — you enable it once in System Settings and it persists.
+
+**What does FlowState access?**
+- Your **clipboard** (to read the text you want typed)
+- Your **keyboard** (to simulate keystrokes and listen for hotkeys)
+- **Google Chrome** (connects via Chrome's debugging port to type into browser tabs)
+
+**What FlowState does NOT do:**
+- ❌ No network requests (except localhost to Chrome)
+- ❌ No telemetry or analytics
+- ❌ No data collection
+- ❌ No registry/system modifications
+
+The setup scripts echo every step they perform. The source code is MIT-licensed and fully auditable.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -175,15 +236,17 @@ Don't forget to give the project a star! Thanks again!
 <!-- LICENSE -->
 ## License
 
-Distributed under the MIT License. See `LICENSE.txt` for more information.
+Distributed under the MIT License. See `LICENSE` for more information.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- ACKNOWLEDGMENTS -->
 ## Acknowledgments
 
-* [keyboard library](https://github.com/boppreh/keyboard)
+* [Playwright](https://playwright.dev/)
 * [pystray](https://github.com/moses-palmer/pystray)
+* [pynput](https://github.com/moses-palmer/pynput)
+* [keyboard library](https://github.com/boppreh/keyboard)
 * [Best-README-Template](https://github.com/othneildrew/Best-README-Template)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
