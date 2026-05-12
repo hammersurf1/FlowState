@@ -47,10 +47,17 @@ class TypingEngine:
         self.defaults = {
             "UserMeanDelay": 35, "UserVariance": 45, "TypoChance": 3, 
             "TypoDelay": 125, "RevisionChance": 5, "SentencePauseMs": 1200, 
-            "ParagraphPauseMs": 2000, "BrainstormFrequency": 60, "EmojiPauseMs": 1800
+            "ParagraphPauseMs": 2000, "BrainstormFrequency": 60, "EmojiPauseMs": 1800,
+            "UseEnterOnly": 0, "EnableTypos": 1, "EnableRevisions": 1,
+            "EnableBrainstormPauses": 1,
+        }
+        self.default_hotkeys = {
+            "TriggerHotkey": "ctrl+alt+v",
+            "PauseKey": "esc",
         }
         
         self.settings = self.defaults.copy()
+        self.hotkeys = self.default_hotkeys.copy()
         self.load_settings()
 
         self.settings_list =["UserMeanDelay", "UserVariance", "TypoChance", "TypoDelay", "RevisionChance"]
@@ -71,8 +78,17 @@ class TypingEngine:
             self.config.read(self.ini_file)
             for section in self.config.sections():
                 for key, val in self.config.items(section):
+                    # Match hotkey string settings
+                    hotkey_key = next((k for k in self.hotkeys if k.lower() == key.lower()), None)
+                    if hotkey_key:
+                        self.hotkeys[hotkey_key] = val
+                        continue
+                    # Match numeric settings
                     actual_key = next((k for k in self.settings if k.lower() == key.lower()), key)
-                    self.settings[actual_key] = int(val)
+                    try:
+                        self.settings[actual_key] = int(val)
+                    except ValueError:
+                        pass
         else:
             self.save_settings()
 
@@ -89,6 +105,16 @@ class TypingEngine:
             'ParagraphPauseMs': str(self.settings['ParagraphPauseMs']),
             'BrainstormFrequency': str(self.settings['BrainstormFrequency']),
             'EmojiPauseMs': str(self.settings['EmojiPauseMs'])
+        }
+        self.config['Behavior'] = {
+            'UseEnterOnly': str(self.settings['UseEnterOnly']),
+            'EnableTypos': str(self.settings['EnableTypos']),
+            'EnableRevisions': str(self.settings['EnableRevisions']),
+            'EnableBrainstormPauses': str(self.settings['EnableBrainstormPauses']),
+        }
+        self.config['Hotkeys'] = {
+            'TriggerHotkey': self.hotkeys['TriggerHotkey'],
+            'PauseKey': self.hotkeys['PauseKey'],
         }
         with open(self.ini_file, 'w') as configfile:
             self.config.write(configfile)
@@ -193,7 +219,7 @@ class TypingEngine:
                 next_char = clipboard_text[i+1] if i + 1 < total_len else ""
 
                 # --- COGNITIVE TYPO LOGIC ---
-                if (i == 0 or clipboard_text[i-1] in[" ", "\n", "\t"]) and char.isalpha() and not just_corrected_word:
+                if self.settings["EnableRevisions"] and (i == 0 or clipboard_text[i-1] in[" ", "\n", "\t"]) and char.isalpha() and not just_corrected_word:
                     word_end = i
                     while word_end < total_len and clipboard_text[word_end].isalpha():
                         word_end += 1
@@ -225,7 +251,7 @@ class TypingEngine:
                     just_corrected_word = False
 
                 # --- INTELLIGENT TYPO LOGIC ---
-                if char_code < 128 and char not in[" ", "\n", "\t"] and random.randint(1, 100) <= self.settings["TypoChance"]:
+                if self.settings["EnableTypos"] and char_code < 128 and char not in[" ", "\n", "\t"] and random.randint(1, 100) <= self.settings["TypoChance"]:
 
                     weights = self._get_typo_weights(char, next_char, self.current_momentum, neighbor_map)
                     choices =["spatial", "transposition", "omission", "doubling"]
@@ -311,12 +337,15 @@ class TypingEngine:
                     i += 1
                     continue
 
-                if char == " " and random.randint(1, self.settings["BrainstormFrequency"]) == 1:
+                if self.settings["EnableBrainstormPauses"] and char == " " and random.randint(1, self.settings["BrainstormFrequency"]) == 1:
                     self._sleep(random.randint(1500, 4000) / 1000.0)
                     self.current_momentum = 0
 
                 if char == "\n":
-                    self.driver.send_shift_enter()
+                    if self.settings["UseEnterOnly"]:
+                        self.driver.send_enter()
+                    else:
+                        self.driver.send_shift_enter()
                     self._sleep(random.randint(self.settings["ParagraphPauseMs"], self.settings["ParagraphPauseMs"] + 1000) / 1000.0)
                     self.current_momentum = 0
                     words_typed_in_sentence = 0

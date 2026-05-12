@@ -79,6 +79,7 @@ class MainApp:
                 menu_items.append(item(f"{prefix}{f_name}: {c_val}", lambda: None, enabled=False))
 
             menu_items.append(item("---", lambda: None, enabled=False))
+            menu_items.append(item("⚙ Settings...", self.open_settings))
             menu_items.append(item("Exit FlowState", self.exit_app))
 
             # Using self.tray_icon.menu assignment from a background thread can hang
@@ -90,6 +91,47 @@ class MainApp:
 
         except Exception as e:
             print(f"Tray Update Error: {e}")
+
+    def open_settings(self):
+        """Launch the Settings GUI in a separate thread (tkinter needs its own mainloop)."""
+        threading.Thread(target=self._run_settings_gui, daemon=True).start()
+
+    def _run_settings_gui(self):
+        from settings_gui import SettingsWindow
+        SettingsWindow(self.engine, on_hotkey_change=self.re_register_hotkeys)
+
+    def _on_trigger(self):
+        """Handle the typing trigger hotkey press."""
+        if self.engine.is_running:
+            self.engine.set_state(paused=not self.engine.is_paused)
+        else:
+            # Snapshot the active window title RIGHT NOW before anything else runs.
+            # Chrome always sets its window title to "<Page Title> - Google Chrome".
+            # We capture this here (on the hotkey thread) so Playwright can match
+            # the exact tab after connecting, regardless of focus changes.
+            buf = ctypes.create_unicode_buffer(512)
+            ctypes.windll.user32.GetWindowTextW(
+                ctypes.windll.user32.GetForegroundWindow(), buf, 512
+            )
+            window_title = buf.value
+            self.pw_queue.put(("trigger_typing", window_title))
+
+    def re_register_hotkeys(self):
+        """Unhook all keyboard hotkeys and re-register them with the current engine values."""
+        try:
+            keyboard.unhook_all_hotkeys()
+        except Exception:
+            pass
+
+        trigger = self.engine.hotkeys.get("TriggerHotkey", "ctrl+alt+v")
+        pause_key = self.engine.hotkeys.get("PauseKey", "esc")
+
+        keyboard.add_hotkey(trigger, self._on_trigger)
+        keyboard.add_hotkey('ctrl+alt+shift+up', lambda: self.engine.cycle_hud(1))
+        keyboard.add_hotkey('ctrl+alt+shift+down', lambda: self.engine.cycle_hud(-1))
+        keyboard.add_hotkey('ctrl+alt+shift+right', lambda: self.engine.adjust_hud(1))
+        keyboard.add_hotkey('ctrl+alt+shift+left', lambda: self.engine.adjust_hud(-1))
+        keyboard.add_hotkey(pause_key, self.engine.handle_esc)
 
     def exit_app(self):
         self.tray_icon.stop()
@@ -107,27 +149,8 @@ class MainApp:
                 self.update_tray()
 
                 # Register Hotkeys — Windows uses the `keyboard` library
-                def on_trigger():
-                    if self.engine.is_running:
-                        self.engine.set_state(paused=not self.engine.is_paused)
-                    else:
-                        # Snapshot the active window title RIGHT NOW before anything else runs.
-                        # Chrome always sets its window title to "<Page Title> - Google Chrome".
-                        # We capture this here (on the hotkey thread) so Playwright can match
-                        # the exact tab after connecting, regardless of focus changes.
-                        buf = ctypes.create_unicode_buffer(512)
-                        ctypes.windll.user32.GetWindowTextW(
-                            ctypes.windll.user32.GetForegroundWindow(), buf, 512
-                        )
-                        window_title = buf.value
-                        self.pw_queue.put(("trigger_typing", window_title))
-
-                keyboard.add_hotkey('ctrl+alt+v', on_trigger)
-                keyboard.add_hotkey('ctrl+alt+shift+up', lambda: self.engine.cycle_hud(1))
-                keyboard.add_hotkey('ctrl+alt+shift+down', lambda: self.engine.cycle_hud(-1))
-                keyboard.add_hotkey('ctrl+alt+shift+right', lambda: self.engine.adjust_hud(1))
-                keyboard.add_hotkey('ctrl+alt+shift+left', lambda: self.engine.adjust_hud(-1))
-                keyboard.add_hotkey('esc', self.engine.handle_esc)
+                # Use engine.hotkeys for configurable key combos
+                self.re_register_hotkeys()
 
                 # Infinite task loop
                 while True:

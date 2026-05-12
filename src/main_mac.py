@@ -31,6 +31,7 @@ class MainApp:
         self.engine = None
         self.tray_icon = None
         self._hotkey_listener = None
+        self._esc_listener = None
 
     def start(self):
         # Boot Playwright on a strict background thread to prevent thread conflicts
@@ -79,6 +80,7 @@ class MainApp:
                 menu_items.append(item(f"{prefix}{f_name}: {c_val}", lambda: None, enabled=False))
 
             menu_items.append(item("---", lambda: None, enabled=False))
+            menu_items.append(item("⚙ Settings...", self.open_settings))
             menu_items.append(item("Exit FlowState", self.exit_app))
 
             # Using self.tray_icon.menu assignment from a background thread can hang
@@ -91,9 +93,78 @@ class MainApp:
         except Exception as e:
             print(f"Tray Update Error: {e}")
 
+    def open_settings(self):
+        """Launch the Settings GUI in a separate thread (tkinter needs its own mainloop)."""
+        threading.Thread(target=self._run_settings_gui, daemon=True).start()
+
+    def _run_settings_gui(self):
+        from settings_gui import SettingsWindow
+        SettingsWindow(self.engine, on_hotkey_change=self.re_register_hotkeys)
+
+    def _on_trigger(self):
+        """Handle the typing trigger hotkey press."""
+        if self.engine.is_running:
+            self.engine.set_state(paused=not self.engine.is_paused)
+        else:
+            # Capture the frontmost window title via AppleScript
+            window_title = PlaywrightDriverMac.get_frontmost_window_title()
+            self.pw_queue.put(("trigger_typing", window_title))
+
+    def re_register_hotkeys(self):
+        """Stop the existing hotkey listener and start a new one with updated key combos."""
+        # Stop existing listeners
+        if self._hotkey_listener:
+            self._hotkey_listener.stop()
+            self._hotkey_listener = None
+        if self._esc_listener:
+            self._esc_listener.stop()
+            self._esc_listener = None
+
+        trigger = self.engine.hotkeys.get("TriggerHotkey", "cmd+alt+v")
+        pause_key = self.engine.hotkeys.get("PauseKey", "esc")
+
+        # Convert our key format to pynput format: ctrl+alt+v -> <ctrl>+<alt>+v
+        def to_pynput_combo(combo_str):
+            parts = combo_str.lower().split("+")
+            converted = []
+            for part in parts:
+                part = part.strip()
+                if part in ("ctrl", "cmd", "alt", "shift",
+                            "up", "down", "left", "right"):
+                    converted.append(f"<{part}>")
+                else:
+                    converted.append(part)
+            return "+".join(converted)
+
+        # Build hotkey dict
+        hotkey_dict = {
+            to_pynput_combo(trigger): self._on_trigger,
+            '<cmd>+<alt>+<shift>+<up>': lambda: self.engine.cycle_hud(1),
+            '<cmd>+<alt>+<shift>+<down>': lambda: self.engine.cycle_hud(-1),
+            '<cmd>+<alt>+<shift>+<right>': lambda: self.engine.adjust_hud(1),
+            '<cmd>+<alt>+<shift>+<left>': lambda: self.engine.adjust_hud(-1),
+        }
+
+        hotkeys = pynput_keyboard.GlobalHotKeys(hotkey_dict)
+        hotkeys.start()
+        self._hotkey_listener = hotkeys
+
+        # Esc / pause key listener
+        resolved_pause = pause_key.lower()
+        def on_press(key):
+            if resolved_pause == "esc" and key == pynput_keyboard.Key.esc:
+                self.engine.handle_esc()
+
+        esc_listener = pynput_keyboard.Listener(on_press=on_press)
+        esc_listener.daemon = True
+        esc_listener.start()
+        self._esc_listener = esc_listener
+
     def exit_app(self):
         if self._hotkey_listener:
             self._hotkey_listener.stop()
+        if self._esc_listener:
+            self._esc_listener.stop()
         self.tray_icon.stop()
         sys.exit(0)
 
@@ -109,53 +180,8 @@ class MainApp:
                 self.update_tray()
 
                 # ─── Register Hotkeys via pynput ───────────────────────────
-                # pynput uses Key enums and KeyCode objects for hotkey combos.
-                # On macOS: Key.cmd = ⌘, Key.alt = ⌥ (Option)
-
-                def on_trigger():
-                    if self.engine.is_running:
-                        self.engine.set_state(paused=not self.engine.is_paused)
-                    else:
-                        # Capture the frontmost window title via AppleScript
-                        window_title = PlaywrightDriverMac.get_frontmost_window_title()
-                        self.pw_queue.put(("trigger_typing", window_title))
-
-                def on_hud_cycle_up():
-                    self.engine.cycle_hud(1)
-
-                def on_hud_cycle_down():
-                    self.engine.cycle_hud(-1)
-
-                def on_hud_adjust_right():
-                    self.engine.adjust_hud(1)
-
-                def on_hud_adjust_left():
-                    self.engine.adjust_hud(-1)
-
-                def on_esc():
-                    self.engine.handle_esc()
-
-                # Define hotkey combinations using pynput's GlobalHotKeys
-                # macOS: Cmd+Option+V to trigger, Cmd+Shift+Option+Arrows for HUD
-                hotkeys = pynput_keyboard.GlobalHotKeys({
-                    '<cmd>+<alt>+v': on_trigger,
-                    '<cmd>+<alt>+<shift>+<up>': on_hud_cycle_up,
-                    '<cmd>+<alt>+<shift>+<down>': on_hud_cycle_down,
-                    '<cmd>+<alt>+<shift>+<right>': on_hud_adjust_right,
-                    '<cmd>+<alt>+<shift>+<left>': on_hud_adjust_left,
-                })
-                hotkeys.start()
-                self._hotkey_listener = hotkeys
-
-                # Esc needs a separate listener since GlobalHotKeys doesn't
-                # handle single-key presses well. We use a standard Listener.
-                def on_press(key):
-                    if key == pynput_keyboard.Key.esc:
-                        on_esc()
-
-                esc_listener = pynput_keyboard.Listener(on_press=on_press)
-                esc_listener.daemon = True
-                esc_listener.start()
+                # Use engine.hotkeys for configurable key combos
+                self.re_register_hotkeys()
 
                 # Infinite task loop
                 while True:
