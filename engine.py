@@ -98,9 +98,9 @@ LAYOUTS = {
 }
 
 COMMON_TYPOS = {
-    "the": ["teh"], "and": ["adn"], "that": ["taht"], "because": ["becuase", "becaus"],
+    "the": ["teh"], "and": ["adn"], "that":["taht"], "because": ["becuase", "becaus"],
     "definitely": ["definately"], "separate": ["seperate"], "a lot":["alot"],
-    "receive": ["recieve"], "their": ["thier", "there"], "you're":["your"]
+    "receive": ["recieve"], "their":["thier", "there"], "you're":["your"]
 }
 
 class TypingEngine:
@@ -119,7 +119,7 @@ class TypingEngine:
         self.settings = self.defaults.copy()
         self.load_settings()
 
-        self.settings_list = ["UserMeanDelay", "UserVariance", "TypoChance", "TypoDelay", "RevisionChance"]
+        self.settings_list =["UserMeanDelay", "UserVariance", "TypoChance", "TypoDelay", "RevisionChance"]
         self.setting_names =["Typing Speed (Lower is Faster)", "Variance", "Typo Chance (%)", "Typo Correction Speed", "Base Revision Chance (%)"]
         self.current_setting_index = 0
 
@@ -140,8 +140,7 @@ class TypingEngine:
                 # Prevent a Windows console pop-up behind the UI
                 kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
                 
-            self.osd_process = subprocess.Popen(
-                [sys.executable, '-c', OSD_SCRIPT],
+            self.osd_process = subprocess.Popen([sys.executable, '-c', OSD_SCRIPT],
                 stdin=subprocess.PIPE,
                 text=True,
                 **kwargs
@@ -266,8 +265,8 @@ class TypingEngine:
 
         self.show_osd("AutoTyper: Running ▶")
 
-        # Actually grab the keyboard
-        self.driver.start_blocker()
+        # Dynamically attach Playwright to Chrome right before typing
+        self.driver.attach()
 
         layout_name = self.driver.detect_layout()
         neighbor_map = LAYOUTS.get(layout_name, LAYOUTS["QWERTY"])
@@ -281,12 +280,14 @@ class TypingEngine:
         i = 0
         while i < total_len:
             if self.is_paused:
-                self.driver.stop_blocker()
+                # Detach to hide Playwright signature while paused
+                self.driver.detach()
                 while self.is_paused and self.is_running:
                     time.sleep(0.1)
                 if not self.is_running:
                     break
-                self.driver.start_blocker()
+                # Reattach when unpaused
+                self.driver.attach()
 
             char = clipboard_text[i]
             char_code = ord(char)
@@ -321,11 +322,11 @@ class TypingEngine:
                     just_corrected_word = True
                     continue
 
-            if not char.isalpha() or (i > 0 and clipboard_text[i-1] not in [" ", "\n", "\t"]):
+            if not char.isalpha() or (i > 0 and clipboard_text[i-1] not in[" ", "\n", "\t"]):
                 just_corrected_word = False
 
             # --- INTELLIGENT TYPO LOGIC ---
-            if char_code < 128 and char not in [" ", "\n", "\t"] and random.randint(1, 100) <= self.settings["TypoChance"]:
+            if char_code < 128 and char not in[" ", "\n", "\t"] and random.randint(1, 100) <= self.settings["TypoChance"]:
                 
                 weights = self._get_typo_weights(char, next_char, self.current_momentum, neighbor_map)
                 choices =["spatial", "transposition", "omission", "doubling"]
@@ -439,7 +440,8 @@ class TypingEngine:
 
             i += 1
 
-        self.driver.stop_blocker()
+        # Completely sever the Playwright connection when typing finishes
+        self.driver.detach()
         self.set_state(running=False, paused=False)
 
     def handle_esc(self):
