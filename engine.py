@@ -7,74 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 
-OSD_SCRIPT = """
-import tkinter as tk
-import sys
-import threading
-import queue
-
-q = queue.Queue()
-
-def read_stdin():
-    while True:
-        line = sys.stdin.readline()
-        if not line:
-            q.put("EXIT_OSD")
-            break
-        q.put(line.strip())
-
-threading.Thread(target=read_stdin, daemon=True).start()
-
-def check_queue():
-    try:
-        while True:
-            msg = q.get_nowait()
-            if msg == "EXIT_OSD":
-                root.destroy()
-                return
-            label.config(text=msg)
-            root.deiconify()
-            try:
-                root.attributes("-alpha", 0.85)
-            except:
-                pass
-            root.update_idletasks()
-            w = root.winfo_width()
-            sw = root.winfo_screenwidth()
-            sh = root.winfo_screenheight()
-            
-            # Positioned nicely in the lower-middle of the screen
-            root.geometry(f"+{(sw-w)//2}+{sh-150}")
-            
-            if hasattr(root, 'hide_timer') and root.hide_timer:
-                root.after_cancel(root.hide_timer)
-            root.hide_timer = root.after(2000, hide_osd)
-    except queue.Empty:
-        pass
-    root.after(50, check_queue)
-
-def hide_osd():
-    try:
-        root.attributes("-alpha", 0.0)
-    except:
-        pass
-    root.withdraw()
-
-root = tk.Tk()
-root.overrideredirect(True)
-root.attributes("-topmost", True)
-try:
-    root.attributes("-alpha", 0.0) # Start invisible
-except:
+class StopTypingException(Exception):
     pass
-root.configure(bg='#1e1e1e')
-label = tk.Label(root, text="", fg='#ffffff', bg='#1e1e1e', font=('Arial', 22, 'bold'), padx=30, pady=15)
-label.pack()
-
-hide_osd()
-root.after(50, check_queue)
-root.mainloop()
-"""
 
 LAYOUTS = {
     "QWERTY": {
@@ -132,31 +66,6 @@ class TypingEngine:
         self.ui_update_callback = None
         self.status_callback = None
 
-        # --- Launch OSD Overlay Server ---
-        self.osd_process = None
-        try:
-            kwargs = {}
-            if os.name == 'nt':
-                # Prevent a Windows console pop-up behind the UI
-                kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
-                
-            self.osd_process = subprocess.Popen([sys.executable, '-c', OSD_SCRIPT],
-                stdin=subprocess.PIPE,
-                text=True,
-                **kwargs
-            )
-        except Exception as e:
-            print(f"Failed to start OSD overlay: {e}")
-
-    def show_osd(self, message):
-        """Sends a message directly to the hidden background UI without blocking macro execution."""
-        if self.osd_process and self.osd_process.poll() is None:
-            try:
-                self.osd_process.stdin.write(message + "\n")
-                self.osd_process.stdin.flush()
-            except Exception:
-                pass
-
     def load_settings(self):
         if self.ini_file.exists():
             self.config.read(self.ini_file)
@@ -186,10 +95,7 @@ class TypingEngine:
 
     def cycle_hud(self, direction):
         self.current_setting_index = (self.current_setting_index + direction) % len(self.settings_list)
-        friendly = self.setting_names[self.current_setting_index]
         val = self.settings[self.settings_list[self.current_setting_index]]
-        
-        self.show_osd(f"{friendly}: {val}")
         
         if self.ui_update_callback:
             self.ui_update_callback()
@@ -203,38 +109,37 @@ class TypingEngine:
             self.settings[var_name] = 0
             
         self.save_settings()
-        
-        friendly = self.setting_names[self.current_setting_index]
-        val = self.settings[var_name]
-        self.show_osd(f"{friendly}: {val}")
-        
         if self.ui_update_callback:
             self.ui_update_callback()
 
     def set_state(self, running=None, paused=None):
-        changed = False
-        was_running = self.is_running
-        was_paused = self.is_paused
-
-        if running is not None and self.is_running != running:
+        if running is not None:
             self.is_running = running
-            changed = True
-        if paused is not None and self.is_paused != paused:
+        if paused is not None:
             self.is_paused = paused
-            changed = True
-            
-        if changed:
-            if self.is_running and self.is_paused:
-                self.show_osd("AutoTyper: Paused ⏸")
-            elif self.is_running and not self.is_paused and not was_running:
-                pass # Countdown will organically handle "Starting..."
-            elif self.is_running and not self.is_paused and was_running and was_paused:
-                self.show_osd("AutoTyper: Resumed ▶")
-            elif not self.is_running and was_running:
-                self.show_osd("AutoTyper: Stopped ⏹")
 
         if self.status_callback:
             self.status_callback()
+
+    def _sleep(self, duration):
+        remaining = duration
+        while True:
+            if not self.is_running:
+                raise StopTypingException()
+            
+            if self.is_paused:
+                self.driver.detach()
+                while self.is_paused and self.is_running:
+                    time.sleep(0.05)
+                if not self.is_running:
+                    raise StopTypingException()
+                self.driver.attach()
+            
+            if remaining <= 0:
+                break
+            chunk = min(0.05, remaining)
+            time.sleep(chunk)
+            remaining -= chunk
 
     def trigger_typing(self):
         if self.is_running:
@@ -250,195 +155,191 @@ class TypingEngine:
         # Lock in running state
         self.set_state(running=True, paused=False)
 
-        # COUNTDOWN LOOP
-        for i in range(3, 0, -1):
-            if not self.is_running: return 
-            self.countdown = i
-            self.show_osd(f"Starting in {i}...")
-            if self.ui_update_callback: self.ui_update_callback()
-            time.sleep(0.5)
-
-        self.countdown = 0
-        if self.ui_update_callback: self.ui_update_callback()
-        
-        if not self.is_running: return
-
-        self.show_osd("AutoTyper: Running ▶")
-
-        # Dynamically attach Playwright to Chrome right before typing
+        # Attach early to capture the active tab before OSD steals focus
         self.driver.attach()
 
-        layout_name = self.driver.detect_layout()
-        neighbor_map = LAYOUTS.get(layout_name, LAYOUTS["QWERTY"])
+        try:
+            # COUNTDOWN LOOP
+            for i in range(3, 0, -1):
+                if not self.is_running: raise StopTypingException()
+                self.countdown = i
+                if self.ui_update_callback: self.ui_update_callback()
+                self._sleep(0.5)
 
-        total_len = len(clipboard_text)
-        self.current_momentum = 0
-        words_typed_in_sentence = 0
-        current_word_buffer = ""
-        just_corrected_word = False
-        
-        i = 0
-        while i < total_len:
-            if self.is_paused:
-                # Detach to hide Playwright signature while paused
-                self.driver.detach()
-                while self.is_paused and self.is_running:
-                    time.sleep(0.1)
-                if not self.is_running:
-                    break
-                # Reattach when unpaused
-                self.driver.attach()
+            self.countdown = 0
+            if self.ui_update_callback: self.ui_update_callback()
+            
+            if not self.is_running: raise StopTypingException()
 
-            char = clipboard_text[i]
-            char_code = ord(char)
-            next_char = clipboard_text[i+1] if i + 1 < total_len else ""
+            # Restore focus to the page after the OSD countdown finishes
+            self.driver.focus_page()
 
-            # --- COGNITIVE TYPO LOGIC ---
-            if (i == 0 or clipboard_text[i-1] in[" ", "\n", "\t"]) and char.isalpha() and not just_corrected_word:
-                word_end = i
-                while word_end < total_len and clipboard_text[word_end].isalpha():
-                    word_end += 1
-                upcoming_word = clipboard_text[i:word_end]
+            layout_name = self.driver.detect_layout()
+            neighbor_map = LAYOUTS.get(layout_name, LAYOUTS["QWERTY"])
 
-                if upcoming_word.lower() in COMMON_TYPOS and random.randint(1, 100) <= self.settings["RevisionChance"]:
-                    wrong_word = random.choice(COMMON_TYPOS[upcoming_word.lower()])
-                    
-                    if upcoming_word.istitle():
-                        wrong_word = wrong_word.capitalize()
+            total_len = len(clipboard_text)
+            self.current_momentum = 0
+            words_typed_in_sentence = 0
+            current_word_buffer = ""
+            just_corrected_word = False
+            
+            i = 0
+            while i < total_len:
+                self._sleep(0)
 
-                    for c in wrong_word:
+                char = clipboard_text[i]
+                char_code = ord(char)
+                next_char = clipboard_text[i+1] if i + 1 < total_len else ""
+
+                # --- COGNITIVE TYPO LOGIC ---
+                if (i == 0 or clipboard_text[i-1] in[" ", "\n", "\t"]) and char.isalpha() and not just_corrected_word:
+                    word_end = i
+                    while word_end < total_len and clipboard_text[word_end].isalpha():
+                        word_end += 1
+                    upcoming_word = clipboard_text[i:word_end]
+
+                    if upcoming_word.lower() in COMMON_TYPOS and random.randint(1, 100) <= self.settings["RevisionChance"]:
+                        wrong_word = random.choice(COMMON_TYPOS[upcoming_word.lower()])
+
+                        if upcoming_word.istitle():
+                            wrong_word = wrong_word.capitalize()
+
+                        for c in wrong_word:
+                            self._human_keystroke(c)
+                            self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+
+                        self._sleep(random.randint(400, 800) / 1000.0)
+
+                        for _ in range(len(wrong_word)):
+                            self.driver.send_backspace()
+                            self._sleep(random.randint(40, 70) / 1000.0)
+
+                        self._sleep(random.randint(600, 1200) / 1000.0)
+                        self.current_momentum = 0
+
+                        just_corrected_word = True
+                        continue
+
+                if not char.isalpha() or (i > 0 and clipboard_text[i-1] not in[" ", "\n", "\t"]):
+                    just_corrected_word = False
+
+                # --- INTELLIGENT TYPO LOGIC ---
+                if char_code < 128 and char not in[" ", "\n", "\t"] and random.randint(1, 100) <= self.settings["TypoChance"]:
+
+                    weights = self._get_typo_weights(char, next_char, self.current_momentum, neighbor_map)
+                    choices =["spatial", "transposition", "omission", "doubling"]
+
+                    typo_type = random.choices(choices, weights=weights, k=1)[0]
+
+                    typo_chars = ""
+                    chars_consumed = 1
+
+                    if typo_type == "spatial":
+                        neighbor = self._get_neighbor(char, neighbor_map)
+                        typo_chars = neighbor if neighbor else char 
+
+                    elif typo_type == "transposition":
+                        typo_chars = next_char + char
+                        chars_consumed = 2 
+                        self._sleep(max(10, self.settings["UserMeanDelay"] - 15) / 1000.0) 
+
+                    elif typo_type == "omission":
+                        typo_chars = ""
+
+                    elif typo_type == "doubling":
+                        typo_chars = char + char
+
+                    for c in typo_chars:
                         self._human_keystroke(c)
-                        time.sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
-                    
-                    time.sleep(random.randint(400, 800) / 1000.0)
-                    
-                    for _ in range(len(wrong_word)):
+                        current_word_buffer += c
+                        self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+
+                    realization_delay = random.randint(0, 3)
+                    if i + chars_consumed + realization_delay >= total_len:
+                        realization_delay = 0
+
+                    for step in range(realization_delay):
+                        buf_char = clipboard_text[i + chars_consumed + step]
+                        self._human_keystroke(buf_char)
+                        current_word_buffer += buf_char
+                        self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+
+                    self._sleep(random.randint(self.settings["TypoDelay"] * 2, self.settings["TypoDelay"] * 4) / 1000.0)
+
+                    backspace_count = len(typo_chars) + realization_delay
+                    for _ in range(backspace_count):
                         self.driver.send_backspace()
-                        time.sleep(random.randint(40, 70) / 1000.0)
-                    
-                    time.sleep(random.randint(600, 1200) / 1000.0)
+                        current_word_buffer = current_word_buffer[:-1]
+                        self._sleep(random.randint(30, 60) / 1000.0)
+
+                    self._sleep(random.randint(100, 200) / 1000.0)
                     self.current_momentum = 0
-                    
-                    just_corrected_word = True
                     continue
 
-            if not char.isalpha() or (i > 0 and clipboard_text[i-1] not in[" ", "\n", "\t"]):
-                just_corrected_word = False
+                # --- NORMAL TYPING EXECUTION ---
+                if 0xD800 <= char_code <= 0xDBFF or char_code > 0xFFFF:
+                    self._sleep(random.randint(self.settings["EmojiPauseMs"], self.settings["EmojiPauseMs"] + 500) / 1000.0)
+                    self.driver.surgical_paste(char)
+                    self._sleep(self.settings["UserMeanDelay"] / 1000.0)
+                    self.current_momentum = 0
+                    current_word_buffer = ""
+                    i += 1
+                    continue
 
-            # --- INTELLIGENT TYPO LOGIC ---
-            if char_code < 128 and char not in[" ", "\n", "\t"] and random.randint(1, 100) <= self.settings["TypoChance"]:
-                
-                weights = self._get_typo_weights(char, next_char, self.current_momentum, neighbor_map)
-                choices =["spatial", "transposition", "omission", "doubling"]
-                
-                typo_type = random.choices(choices, weights=weights, k=1)[0]
+                is_separator = char in[" ", ".", ",", "!", "?", "\n", "\t", ";", ":"]
 
-                typo_chars = ""
-                chars_consumed = 1
+                if is_separator:
+                    if char == " ":
+                        words_typed_in_sentence += 1
+                    current_word_buffer = ""
+                else:
+                    current_word_buffer += char
 
-                if typo_type == "spatial":
-                    neighbor = self._get_neighbor(char, neighbor_map)
-                    typo_chars = neighbor if neighbor else char 
+                if char in [".", "?", "!"] and next_char in [" ", "\n"]:
+                    self._human_keystroke(char)
+                    self._sleep(random.randint(self.settings["SentencePauseMs"], self.settings["SentencePauseMs"] + 400) / 1000.0)
+                    self.current_momentum = 0
+                    words_typed_in_sentence = 0
+                    i += 1
+                    continue
 
-                elif typo_type == "transposition":
-                    typo_chars = next_char + char
-                    chars_consumed = 2 
-                    time.sleep(max(10, self.settings["UserMeanDelay"] - 15) / 1000.0) 
-                    
-                elif typo_type == "omission":
-                    typo_chars = ""
-                    
-                elif typo_type == "doubling":
-                    typo_chars = char + char
+                if char in [",", ";"]:
+                    self._human_keystroke(char)
+                    self._sleep(random.randint(300, 600) / 1000.0)
+                    self.current_momentum = max(0, self.current_momentum - 5)
+                    i += 1
+                    continue
 
-                for c in typo_chars:
-                    self._human_keystroke(c)
-                    current_word_buffer += c
-                    time.sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+                if char == " " and random.randint(1, self.settings["BrainstormFrequency"]) == 1:
+                    self._sleep(random.randint(1500, 4000) / 1000.0)
+                    self.current_momentum = 0
 
-                realization_delay = random.randint(0, 3)
-                if i + chars_consumed + realization_delay >= total_len:
-                    realization_delay = 0
+                if char == "\n":
+                    self.driver.send_shift_enter()
+                    self._sleep(random.randint(self.settings["ParagraphPauseMs"], self.settings["ParagraphPauseMs"] + 1000) / 1000.0)
+                    self.current_momentum = 0
+                    words_typed_in_sentence = 0
+                elif char == "\t":
+                    self.driver.send_tab()
+                    self._sleep(random.randint(50, 100) / 1000.0)
+                else:
+                    self._human_keystroke(char)
+                    if self.current_momentum < 15:
+                        self.current_momentum += 0.5
 
-                for step in range(realization_delay):
-                    buf_char = clipboard_text[i + chars_consumed + step]
-                    self._human_keystroke(buf_char)
-                    current_word_buffer += buf_char
-                    time.sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+                calc_mean = self.settings["UserMeanDelay"] - self.current_momentum
+                bigram = (char + next_char).lower()
+                if bigram in["th", "he", "in", "er", "an", "re", "on", "at", "en", "nd", "ti", "es", "or", "te", "of", "ed", "is", "it", "al", "ar", "st", "to", "nt"]:
+                    calc_mean -= 10
 
-                time.sleep(random.randint(self.settings["TypoDelay"] * 2, self.settings["TypoDelay"] * 4) / 1000.0)
+                final_delay = self._gaussian(calc_mean, self.settings["UserVariance"])
+                final_delay = max(10, min(final_delay, 250))
+                self._sleep(final_delay / 1000.0)
 
-                backspace_count = len(typo_chars) + realization_delay
-                for _ in range(backspace_count):
-                    self.driver.send_backspace()
-                    current_word_buffer = current_word_buffer[:-1]
-                    time.sleep(random.randint(30, 60) / 1000.0)
-                
-                time.sleep(random.randint(100, 200) / 1000.0)
-                self.current_momentum = 0
-                continue
-
-            # --- NORMAL TYPING EXECUTION ---
-            if 0xD800 <= char_code <= 0xDBFF or char_code > 0xFFFF:
-                time.sleep(random.randint(self.settings["EmojiPauseMs"], self.settings["EmojiPauseMs"] + 500) / 1000.0)
-                self.driver.surgical_paste(char)
-                time.sleep(self.settings["UserMeanDelay"] / 1000.0)
-                self.current_momentum = 0
-                current_word_buffer = ""
                 i += 1
-                continue
 
-            is_separator = char in[" ", ".", ",", "!", "?", "\n", "\t", ";", ":"]
-
-            if is_separator:
-                if char == " ":
-                    words_typed_in_sentence += 1
-                current_word_buffer = ""
-            else:
-                current_word_buffer += char
-
-            if char in [".", "?", "!"] and next_char in [" ", "\n"]:
-                self._human_keystroke(char)
-                time.sleep(random.randint(self.settings["SentencePauseMs"], self.settings["SentencePauseMs"] + 400) / 1000.0)
-                self.current_momentum = 0
-                words_typed_in_sentence = 0
-                i += 1
-                continue
-                
-            if char in [",", ";"]:
-                self._human_keystroke(char)
-                time.sleep(random.randint(300, 600) / 1000.0)
-                self.current_momentum = max(0, self.current_momentum - 5)
-                i += 1
-                continue
-                
-            if char == " " and random.randint(1, self.settings["BrainstormFrequency"]) == 1:
-                time.sleep(random.randint(1500, 4000) / 1000.0)
-                self.current_momentum = 0
-
-            if char == "\n":
-                self.driver.send_shift_enter()
-                time.sleep(random.randint(self.settings["ParagraphPauseMs"], self.settings["ParagraphPauseMs"] + 1000) / 1000.0)
-                self.current_momentum = 0
-                words_typed_in_sentence = 0
-            elif char == "\t":
-                self.driver.send_tab()
-                time.sleep(random.randint(50, 100) / 1000.0)
-            else:
-                self._human_keystroke(char)
-                if self.current_momentum < 15:
-                    self.current_momentum += 0.5
-
-            calc_mean = self.settings["UserMeanDelay"] - self.current_momentum
-            bigram = (char + next_char).lower()
-            if bigram in["th", "he", "in", "er", "an", "re", "on", "at", "en", "nd", "ti", "es", "or", "te", "of", "ed", "is", "it", "al", "ar", "st", "to", "nt"]:
-                calc_mean -= 10
-
-            final_delay = self._gaussian(calc_mean, self.settings["UserVariance"])
-            final_delay = max(10, min(final_delay, 250))
-            time.sleep(final_delay / 1000.0)
-
-            i += 1
+        except StopTypingException:
+            pass
 
         # Completely sever the Playwright connection when typing finishes
         self.driver.detach()

@@ -35,42 +35,51 @@ class MainApp:
         self.tray_icon.run()
 
     def update_tray(self):
-        if not self.engine: return
+        if not self.engine or not self.tray_icon: return
         
-        var_name = self.engine.settings_list[self.engine.current_setting_index]
-        val = self.engine.settings[var_name]
-        friendly = self.engine.setting_names[self.engine.current_setting_index]
-        
-        color = "#0078D7" 
-        status_text = "Idle"
-        
-        if self.engine.is_running and self.engine.countdown > 0:
-            color = "#FFB900" 
-            status_text = f"Starting in {self.engine.countdown}..."
-        elif self.engine.is_running and not self.engine.is_paused:
-            color = "#107C10" 
-            status_text = "Running"
-        elif self.engine.is_paused:
-            color = "#D83B01" 
-            status_text = "Paused"
+        try:
+            var_name = self.engine.settings_list[self.engine.current_setting_index]
+            val = self.engine.settings[var_name]
+            friendly = self.engine.setting_names[self.engine.current_setting_index]
             
-        self.tray_icon.icon = create_image(color)
-        self.tray_icon.title = f"AutoTyper ({status_text})\n{friendly}: {val}"
+            color = "#0078D7" 
+            status_text = "Idle"
+            
+            if self.engine.is_running and self.engine.countdown > 0:
+                color = "#FFB900" 
+                status_text = f"Starting in {self.engine.countdown}..."
+            elif self.engine.is_running and not self.engine.is_paused:
+                color = "#107C10" 
+                status_text = "Running"
+            elif self.engine.is_paused:
+                color = "#D83B01" 
+                status_text = "Paused"
+                
+            self.tray_icon.icon = create_image(color)
+            self.tray_icon.title = f"AutoTyper ({status_text})\n{friendly}: {val}"
 
-        menu_items =[]
-        menu_items.append(item(f"Status: {status_text}", lambda: None, enabled=False))
-        menu_items.append(item("---", lambda: None, enabled=False))
+            menu_items =[]
+            menu_items.append(item(f"Status: {status_text}", lambda: None, enabled=False))
+            menu_items.append(item("---", lambda: None, enabled=False))
 
-        for i, v_name in enumerate(self.engine.settings_list):
-            f_name = self.engine.setting_names[i]
-            c_val = self.engine.settings[v_name]
-            prefix = "▶ " if i == self.engine.current_setting_index else "  "
-            menu_items.append(item(f"{prefix}{f_name}: {c_val}", lambda: None, enabled=False))
+            for i, v_name in enumerate(self.engine.settings_list):
+                f_name = self.engine.setting_names[i]
+                c_val = self.engine.settings[v_name]
+                prefix = "▶ " if i == self.engine.current_setting_index else "  "
+                menu_items.append(item(f"{prefix}{f_name}: {c_val}", lambda: None, enabled=False))
 
-        menu_items.append(item("---", lambda: None, enabled=False))
-        menu_items.append(item("Exit AutoTyper", self.exit_app))
-        
-        self.tray_icon.menu = pystray.Menu(*menu_items)
+            menu_items.append(item("---", lambda: None, enabled=False))
+            menu_items.append(item("Exit AutoTyper", self.exit_app))
+            
+            # Using self.tray_icon.menu assignment from a background thread can hang
+            # if done too rapidly (like during countdown).
+            if self.engine.countdown == 0 and not getattr(self, '_updating_menu', False):
+                self._updating_menu = True
+                self.tray_icon.menu = pystray.Menu(*menu_items)
+                self._updating_menu = False
+                
+        except Exception as e:
+            print(f"Tray Update Error: {e}")
 
     def exit_app(self):
         self.tray_icon.stop()
@@ -87,28 +96,32 @@ class MainApp:
                 self.engine.status_callback = self.update_tray
                 self.update_tray()
 
-                # Register Hotkeys to push to queue instead of executing directly
-                keyboard.add_hotkey('ctrl+alt+v', lambda: self.pw_queue.put(("trigger_typing", None)))
-                keyboard.add_hotkey('ctrl+alt+shift+up', lambda: self.pw_queue.put(("cycle_hud", 1)))
-                keyboard.add_hotkey('ctrl+alt+shift+down', lambda: self.pw_queue.put(("cycle_hud", -1)))
-                keyboard.add_hotkey('ctrl+alt+shift+right', lambda: self.pw_queue.put(("adjust_hud", 1)))
-                keyboard.add_hotkey('ctrl+alt+shift+left', lambda: self.pw_queue.put(("adjust_hud", -1)))
-                keyboard.add_hotkey('esc', lambda: self.pw_queue.put(("handle_esc", None)))
+                # Register Hotkeys to directly update state when possible
+                keyboard.add_hotkey('ctrl+alt+v', lambda: self.pw_queue.put(("trigger_typing", None)) if not self.engine.is_running else self.engine.set_state(paused=not self.engine.is_paused))
+                keyboard.add_hotkey('ctrl+alt+shift+up', lambda: self.engine.cycle_hud(1))
+                keyboard.add_hotkey('ctrl+alt+shift+down', lambda: self.engine.cycle_hud(-1))
+                keyboard.add_hotkey('ctrl+alt+shift+right', lambda: self.engine.adjust_hud(1))
+                keyboard.add_hotkey('ctrl+alt+shift+left', lambda: self.engine.adjust_hud(-1))
+                keyboard.add_hotkey('esc', self.engine.handle_esc)
 
                 # Infinite task loop
                 while True:
                     action, arg = self.pw_queue.get()
-                    if action == "trigger_typing":
-                        self.engine.trigger_typing()
-                    elif action == "cycle_hud":
-                        self.engine.cycle_hud(arg)
-                    elif action == "adjust_hud":
-                        self.engine.adjust_hud(arg)
-                    elif action == "handle_esc":
-                        self.engine.handle_esc()
+                    try:
+                        if action == "trigger_typing":
+                            self.engine.trigger_typing()
+                        elif action == "cycle_hud":
+                            self.engine.cycle_hud(arg)
+                        elif action == "adjust_hud":
+                            self.engine.adjust_hud(arg)
+                        elif action == "handle_esc":
+                            self.engine.handle_esc()
+                    except Exception as e:
+                        print(f"Action Error ({action}): {e}")
+                        self.engine.set_state(running=False, paused=False)
                         
         except Exception as e:
-            print(f"Playwright Worker Error: {e}")
+            print(f"Playwright Worker Critical Error: {e}")
 
 if __name__ == "__main__":
     app = MainApp()

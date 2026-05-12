@@ -13,6 +13,8 @@ class PlaywrightDriver:
         self.page = None
 
     def attach(self):
+        if self.browser:
+            return
         # Dynamically connect only when typing begins
         print("Attaching to Stealth Chrome on port 9225...")
         try:
@@ -24,14 +26,12 @@ class PlaywrightDriver:
                 try:
                     self.browser = self.p.chromium.connect_over_cdp('http://localhost:9225')
                 except Exception:
-                    print("\n[ERROR] Auto-launch failed to open the debugging port.")
-                    sys.exit(1)
+                    raise Exception("Failed to open debugging port. If Chrome is already running, you MUST completely close it or launch it with --remote-debugging-port=9225 first!")
             else:
-                print("\n[ERROR] Could not find Google Chrome installed.")
-                sys.exit(1)
+                raise Exception("Could not find Google Chrome installed.")
         
         self.context = self.browser.contexts[0]
-        self._ensure_docs_page()
+        self._ensure_active_page()
 
     def detach(self):
         # Sever the connection completely when typing finishes
@@ -69,23 +69,40 @@ class PlaywrightDriver:
         ])
         return True
 
-    def _ensure_docs_page(self):
+    def _ensure_active_page(self):
+        # First try to find the page that actively has focus
         for page in self.context.pages:
-            if "docs.google.com/document" in page.url:
-                self.page = page
-                self.page.bring_to_front()
-                try:
-                    self.page.wait_for_selector('.kix-appview-editor', state='visible', timeout=3000)
-                    self.page.click('.kix-appview-editor')
-                except:
-                    pass
-                return
+            try:
+                if page.evaluate("document.hasFocus()"):
+                    self.page = page
+                    self.page.bring_to_front()
+                    return
+            except Exception:
+                pass
+                
+        # Fallback to the first visible page if none have focus
+        for page in self.context.pages:
+            try:
+                if page.evaluate("document.visibilityState === 'visible'"):
+                    self.page = page
+                    self.page.bring_to_front()
+                    return
+            except Exception:
+                pass
+        
+        # Fallback to the first page available
+        if self.context.pages:
+            self.page = self.context.pages[0]
+            
+        if not self.page:
+            raise Exception("No browser tabs found! Playwright cannot type into a closed browser.")
 
-        self.page = self.context.new_page()
-        self.page.goto('https://docs.google.com/document/create', wait_until='domcontentloaded')
-        self.page.wait_for_selector('.kix-appview-editor', state='visible', timeout=15000)
-        self.page.wait_for_timeout(2000)
-        self.page.click('.kix-appview-editor')
+    def focus_page(self):
+        if self.page:
+            try:
+                self.page.bring_to_front()
+            except Exception:
+                pass
 
     def detect_layout(self):
         try:
