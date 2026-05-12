@@ -41,7 +41,9 @@ class TypingEngine:
     def __init__(self, driver):
         self.driver = driver
         
-        self.ini_file = Path(os.path.dirname(__file__)) / "settings.ini"
+        config_dir = Path.home() / ".flowstate"
+        config_dir.mkdir(exist_ok=True)
+        self.ini_file = config_dir / "settings.ini"
         self.config = configparser.ConfigParser()
         
         self.defaults = {

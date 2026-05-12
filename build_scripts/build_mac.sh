@@ -23,6 +23,7 @@ pyinstaller \
     --onefile \
     --name="FlowState" \
     --icon="assets/logo.png" \
+    --hidden-import settings_gui \
     --collect-all playwright \
     src/main_mac.py
 

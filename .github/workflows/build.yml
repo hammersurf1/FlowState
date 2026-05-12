@@ -22,7 +22,7 @@ jobs:
           pip install pyinstaller
 
       - name: Build Windows EXE
-        run: pyinstaller --noconsole --onefile --name="FlowState" --collect-all playwright src\main_win.py
+        run: pyinstaller --noconsole --onefile --uac-admin --name="FlowState" --hidden-import settings_gui --collect-all playwright src\main_win.py
 
       - name: Create Windows Installer (Inno Setup)
         # Inno Setup is conveniently pre-installed on GitHub's Windows cloud servers!
@@ -51,7 +51,7 @@ jobs:
           pip install pyinstaller
 
       - name: Build Mac App
-        run: pyinstaller --windowed --onefile --name="FlowState" --collect-all playwright src/main_mac.py
+        run: pyinstaller --windowed --onefile --name="FlowState" --hidden-import settings_gui --collect-all playwright src/main_mac.py
 
       - name: Create Mac DMG Installer
         # We use Apple's built-in hdiutil tool to package the .app into a .dmg

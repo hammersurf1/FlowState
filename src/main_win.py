@@ -33,15 +33,16 @@ class MainApp:
         self.tray_icon = None
 
     def start(self):
-        # Boot Playwright on a strict background thread to prevent thread conflicts
-        threading.Thread(target=self.playwright_worker, daemon=True).start()
+        def setup_icon(icon):
+            self.tray_icon.visible = True
+            threading.Thread(target=self.playwright_worker, daemon=True).start()
 
         # Setup System Tray (Must be on main thread)
         self.tray_icon = pystray.Icon("FlowState", create_image("#0078D7"), "FlowState: Starting...")
         self.tray_icon.menu = pystray.Menu(item("Starting up...", lambda: None, enabled=False))
 
         print("FlowState starting... look for the system tray icon.")
-        self.tray_icon.run()
+        self.tray_icon.run(setup=setup_icon)
 
     def update_tray(self):
         if not self.engine or not self.tray_icon:

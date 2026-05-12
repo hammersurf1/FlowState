@@ -5,7 +5,7 @@ cd ..
 
 :: 1. Compile Python to a standalone .exe
 :: We MUST use --collect-all playwright so PyInstaller grabs the background drivers!
-uv run pyinstaller --noconsole --onefile --icon="assets\icon.ico" --name="FlowState" --collect-all playwright src\main_win.py
+uv run pyinstaller --noconsole --onefile --uac-admin --icon="assets\icon.ico" --name="FlowState" --hidden-import settings_gui --collect-all playwright src\main_win.py
 
 :: 2. Package into an Installer using Inno Setup
 echo Creating Windows Installer...
