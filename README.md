@@ -193,7 +193,7 @@ FlowState is fully open-source and designed to be transparent about what it does
 - ❌ No data collection
 - ❌ No registry/system modifications
 
-The setup scripts echo every step they perform. The source code is MIT-licensed and fully auditable.
+The setup scripts echo every step they perform. The source code is MIT-licensed and fully auditable. The system is 100% local.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -202,8 +202,8 @@ The setup scripts echo every step they perform. The source code is MIT-licensed 
 
 - [x] Windows Support
 - [x] macOS Support
+- [x] Custom Macro Support
 - [ ] Linux Driver Implementation
-- [ ] Custom Macro Support
 - [ ] Profile Saving/Loading
 - [ ] Intelligent revision history w/ NLP
 
