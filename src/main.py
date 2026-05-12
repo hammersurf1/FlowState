@@ -5,6 +5,7 @@ import sys
 import threading
 import queue
 import keyboard
+import ctypes
 from playwright.sync_api import sync_playwright
 
 from engine import TypingEngine
@@ -97,7 +98,22 @@ class MainApp:
                 self.update_tray()
 
                 # Register Hotkeys to directly update state when possible
-                keyboard.add_hotkey('ctrl+alt+v', lambda: self.pw_queue.put(("trigger_typing", None)) if not self.engine.is_running else self.engine.set_state(paused=not self.engine.is_paused))
+                def on_trigger():
+                    if self.engine.is_running:
+                        self.engine.set_state(paused=not self.engine.is_paused)
+                    else:
+                        # Snapshot the active window title RIGHT NOW before anything else runs.
+                        # Chrome always sets its window title to "<Page Title> - Google Chrome".
+                        # We capture this here (on the hotkey thread) so Playwright can match
+                        # the exact tab after connecting, regardless of focus changes.
+                        buf = ctypes.create_unicode_buffer(512)
+                        ctypes.windll.user32.GetWindowTextW(
+                            ctypes.windll.user32.GetForegroundWindow(), buf, 512
+                        )
+                        window_title = buf.value
+                        self.pw_queue.put(("trigger_typing", window_title))
+
+                keyboard.add_hotkey('ctrl+alt+v', on_trigger)
                 keyboard.add_hotkey('ctrl+alt+shift+up', lambda: self.engine.cycle_hud(1))
                 keyboard.add_hotkey('ctrl+alt+shift+down', lambda: self.engine.cycle_hud(-1))
                 keyboard.add_hotkey('ctrl+alt+shift+right', lambda: self.engine.adjust_hud(1))
@@ -109,7 +125,7 @@ class MainApp:
                     action, arg = self.pw_queue.get()
                     try:
                         if action == "trigger_typing":
-                            self.engine.trigger_typing()
+                            self.engine.trigger_typing(arg)
                         elif action == "cycle_hud":
                             self.engine.cycle_hud(arg)
                         elif action == "adjust_hud":
@@ -118,6 +134,7 @@ class MainApp:
                             self.engine.handle_esc()
                     except Exception as e:
                         print(f"Action Error ({action}): {e}")
+                        self.engine.driver.detach()
                         self.engine.set_state(running=False, paused=False)
                         
         except Exception as e:

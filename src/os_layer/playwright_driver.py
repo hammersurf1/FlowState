@@ -12,8 +12,10 @@ class PlaywrightDriver:
         self.context = None
         self.page = None
 
-    def attach(self):
+    def attach(self, window_title=None):
         if self.browser:
+            # Already attached - just re-acquire the correct page
+            self._ensure_active_page(window_title)
             return
         # Dynamically connect only when typing begins
         print("Attaching to Stealth Chrome on port 9225...")
@@ -31,14 +33,14 @@ class PlaywrightDriver:
                 raise Exception("Could not find Google Chrome installed.")
         
         self.context = self.browser.contexts[0]
-        self._ensure_active_page()
+        self._ensure_active_page(window_title)
 
     def detach(self):
         # Sever the connection completely when typing finishes
         print("Detaching from Chrome...")
         if self.browser:
             try:
-                self.browser.disconnect()
+                self.browser.close()
             except Exception:
                 pass
             self.browser = None
@@ -69,30 +71,57 @@ class PlaywrightDriver:
         ])
         return True
 
-    def _ensure_active_page(self):
-        # First try to find the page that actively has focus
+    def _ensure_active_page(self, window_title=None):
+        def safe_eval(page, script):
+            for _ in range(3):
+                try:
+                    return page.evaluate(script)
+                except Exception:
+                    time.sleep(0.1)
+            return False
+
+        # STRATEGY 1: Match by window title (most reliable - captured at hotkey press time).
+        # Chrome window title format: "<Page Title> - Google Chrome"
+        # Strip the " - Google Chrome" suffix to get the raw page title.
+        if window_title:
+            page_title_hint = window_title.replace(" - Google Chrome", "").strip()
+            if page_title_hint:
+                print(f"Looking for tab matching title: '{page_title_hint}'")
+                for page in self.context.pages:
+                    try:
+                        if page_title_hint.lower() in page.title().lower() or page.title().lower() in page_title_hint.lower():
+                            self.page = page
+                            self.page.bring_to_front()
+                            print(f"Matched tab by title: '{page.title()}'")
+                            return
+                    except Exception:
+                        pass
+
+        # STRATEGY 2: document.hasFocus() - works if CDP connection was fast
         for page in self.context.pages:
-            try:
-                if page.evaluate("document.hasFocus()"):
-                    self.page = page
-                    self.page.bring_to_front()
-                    return
-            except Exception:
-                pass
+            if safe_eval(page, "document.hasFocus()"):
+                self.page = page
+                self.page.bring_to_front()
+                return
                 
-        # Fallback to the first visible page if none have focus
+        # STRATEGY 3: Visible page with an active text input
         for page in self.context.pages:
-            try:
-                if page.evaluate("document.visibilityState === 'visible'"):
-                    self.page = page
-                    self.page.bring_to_front()
-                    return
-            except Exception:
-                pass
+            if safe_eval(page, "document.visibilityState === 'visible' && document.activeElement && (document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT' || document.activeElement.isContentEditable)"):
+                self.page = page
+                self.page.bring_to_front()
+                return
+                
+        # STRATEGY 4: Any visible page
+        for page in self.context.pages:
+            if safe_eval(page, "document.visibilityState === 'visible'"):
+                self.page = page
+                self.page.bring_to_front()
+                return
         
-        # Fallback to the first page available
+        # STRATEGY 5: Last resort - most recently opened tab
         if self.context.pages:
-            self.page = self.context.pages[0]
+            self.page = self.context.pages[-1]
+            self.page.bring_to_front()
             
         if not self.page:
             raise Exception("No browser tabs found! Playwright cannot type into a closed browser.")

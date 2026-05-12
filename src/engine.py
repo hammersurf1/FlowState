@@ -141,7 +141,7 @@ class TypingEngine:
             time.sleep(chunk)
             remaining -= chunk
 
-    def trigger_typing(self):
+    def trigger_typing(self, window_title=None):
         if self.is_running:
             self.set_state(paused=not self.is_paused)
             return
@@ -152,11 +152,12 @@ class TypingEngine:
 
         clipboard_text = clipboard_text.replace("\r\n", "\n")
         
+        # Attach and lock onto the correct tab using the window title
+        # captured at hotkey-press time (before any focus changes occur)
+        self.driver.attach(window_title)
+
         # Lock in running state
         self.set_state(running=True, paused=False)
-
-        # Attach early to capture the active tab before OSD steals focus
-        self.driver.attach()
 
         try:
             # COUNTDOWN LOOP
