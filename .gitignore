@@ -1,18 +1,23 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
-build/
-dist/
-wheels/
 *.egg-info
 
+# Build outputs (PyInstaller, Inno Setup)
+build/
+dist/
+build_scripts/dist/
+*.spec
+
 # Virtual environments
-.venv
+.venv/
 
-# uv project files
-uv.lock
-pyproject.toml
-.python-version
+# User-specific runtime state (auto-generated on first run)
+settings.ini
 
-# Context files
+# AI context files (not part of the project)
 GEMINI.md
+
+# OS junk
+.DS_Store
+Thumbs.db

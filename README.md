@@ -262,7 +262,7 @@ Distributed under the MIT License. See `LICENSE` for more information.
 [issues-shield]: https://img.shields.io/github/issues/hammersurf1/FlowState.svg?style=for-the-badge
 [issues-url]: https://github.com/hammersurf1/FlowState/issues
 [license-shield]: https://img.shields.io/github/license/hammersurf1/FlowState.svg?style=for-the-badge
-[license-url]: https://github.com/hammersurf1/FlowState/blob/master/LICENSE.txt
+[license-url]: https://github.com/hammersurf1/FlowState/blob/main/LICENSE.txt
 [product-screenshot]: assets/screenshot.png
 
 [Python.org]: https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white

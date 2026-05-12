@@ -1,0 +1,33 @@
+# FlowState default settings
+# Copy this file to settings.ini — it will be created automatically on first run.
+# Changes are saved live via the tray icon HUD (Ctrl+Shift+Alt+Arrows on Windows,
+# Cmd+Shift+Option+Arrows on macOS).
+
+[Settings]
+# Average delay between keystrokes in milliseconds
+usermeandelay = 110
+
+# Variance in keystroke delay (higher = more erratic rhythm)
+uservariance = 45
+
+# Chance of making a typo per keystroke (percentage, 0-100)
+typochance = 7
+
+# Pause after making and correcting a typo (milliseconds)
+typodelay = 100
+
+# Chance of a multi-word revision / retyping event (percentage, 0-100)
+revisionchance = 3
+
+[Advanced]
+# Pause after sentence-ending punctuation (milliseconds)
+sentencepausems = 1200
+
+# Pause between paragraphs (milliseconds)
+paragraphpausems = 2000
+
+# Average number of words between "brainstorm" (thinking) pauses
+brainstormfrequency = 60
+
+# Pause after typing an emoji (milliseconds)
+emojipausems = 1800
