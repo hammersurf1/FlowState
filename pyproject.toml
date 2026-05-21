@@ -1,13 +1,14 @@
 [project]
-name = "flowstate-dev"
-version = "0.1.0"
-description = "Add your description here"
+name = "flowstate"
+version = "1.0.0"
+description = "A realistic typing simulator that pastes clipboard content with human-like imperfections"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = [
     "configparser>=7.2.0",
     "keyboard>=0.13.5",
     "pillow>=12.2.0",
+    "playwright>=1.59.0",
     "pynput>=1.8.1",
     "pyperclip>=1.11.0",
     "pystray>=0.19.5",

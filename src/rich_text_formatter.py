@@ -1,0 +1,214 @@
+"""
+FlowState — Rich Text Formatter
+Parses Markdown-flavoured clipboard text into a sequence of TypeActions and
+KeyActions that the TypingEngine executes to produce bold, italic, underline,
+bullet lists, numbered lists, and nested sub-items in the target browser app.
+
+Supported syntax:
+  **text** or __text__        → Bold       (Ctrl/Cmd+B)
+  *text*   or _text_          → Italic     (Ctrl/Cmd+I)
+  ___text___                  → Underline  (Ctrl/Cmd+U)  [triple underscore]
+  - item  / * item            → Unordered bullet
+  1. item                     → Ordered list item
+  Leading \\t or 2/4 spaces   → Sub-level indent (Tab after Enter)
+  \\n                         → Enter (always hard Enter for list items)
+
+Design notes:
+- Parse line-by-line to detect list context, then inline-parse each line for
+  bold/italic/underline spans.
+- Formatting shortcuts are toggled before and after each span (open/close).
+- The formatter is stateless; it returns an immutable list of actions per call.
+- Platform ('win' or 'mac') determines the modifier key (Ctrl vs Cmd).
+- Typos only fire on TypeAction text; KeyActions are never mis-typed.
+"""
+
+import re
+import sys
+from dataclasses import dataclass
+from typing import List
+
+# Maximum list nesting depth (matches Google Docs / Notion behaviour)
+MAX_INDENT_DEPTH = 4
+
+
+@dataclass
+class TypeAction:
+    """Instruct the engine to type a string with normal human rhythm."""
+    text: str
+
+
+@dataclass
+class KeyAction:
+    """Instruct the engine to press a keyboard shortcut immediately."""
+    shortcut: str   # e.g. "ctrl+b", "tab", "enter"
+
+
+Action = TypeAction | KeyAction
+
+
+class RichTextFormatter:
+    """
+    Converts Markdown-flavoured plain text into an ordered list of Actions.
+
+    Usage:
+        formatter = RichTextFormatter(platform='win')  # or 'mac'
+        actions = formatter.parse(clipboard_text)
+        # actions is a list of TypeAction / KeyAction objects
+    """
+
+    def __init__(self, platform: str = "win"):
+        # Normalise platform string
+        if platform == "darwin" or platform == "mac":
+            self._mod = "Meta"      # Playwright key name for Cmd on macOS
+        else:
+            self._mod = "Control"   # Playwright key name for Ctrl on Windows/Linux
+
+        # Regex to detect list-item lines (unordered or ordered)
+        self._unordered_re = re.compile(r'^(\s*)[-*]\s+(.*)', re.DOTALL)
+        self._ordered_re   = re.compile(r'^(\s*)(\d+)\.\s+(.*)', re.DOTALL)
+
+    # ─── Public API ──────────────────────────────────────────────────────────
+
+    def parse(self, text: str) -> List[Action]:
+        """
+        Parse *text* and return a flat list of TypeAction / KeyAction objects.
+
+        The caller should iterate the list sequentially:
+          - TypeAction  → run through the normal keystroke engine (typos, rhythm)
+          - KeyAction   → press immediately with a small human-like pre/post delay
+        """
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        lines = text.split("\n")
+
+        actions: List[Action] = []
+        list_state: str | None = None   # "ul" | "ol" | None
+        is_first_line = True
+
+        for line_idx, raw_line in enumerate(lines):
+            # Peek at the next non-empty line to decide list continuation
+            next_line = lines[line_idx + 1] if line_idx + 1 < len(lines) else ""
+
+            ul_match = self._unordered_re.match(raw_line)
+            ol_match = self._ordered_re.match(raw_line)
+
+            if ul_match or ol_match:
+                # ── List item ────────────────────────────────────────────────
+                match = ul_match or ol_match
+                indent_str = match.group(1)
+                content    = match.group(3) if ol_match else match.group(2)
+                depth      = self._indent_depth(indent_str)
+
+                if not is_first_line:
+                    # Between list items always use a hard Enter
+                    actions.append(KeyAction("Enter"))
+
+                # Activate the correct list mode on the first item of each block
+                if ul_match and list_state != "ul":
+                    # Ctrl/Cmd+Shift+8 → unordered list in Google Docs / Notion
+                    actions.append(KeyAction(f"{self._mod}+Shift+8"))
+                    list_state = "ul"
+                elif ol_match and list_state != "ol":
+                    # Ctrl/Cmd+Shift+7 → ordered list in Google Docs / Notion
+                    actions.append(KeyAction(f"{self._mod}+Shift+7"))
+                    list_state = "ol"
+
+                # Indent to the correct nesting level using Tab
+                effective_depth = min(depth, MAX_INDENT_DEPTH)
+                for _ in range(effective_depth):
+                    actions.append(KeyAction("Tab"))
+
+                # Type the list item content with inline formatting
+                actions.extend(self._parse_inline(content))
+
+            else:
+                # ── Plain / paragraph line ───────────────────────────────────
+                # If we were in a list and now we're not, deactivate list mode
+                # (the user presses Enter twice to exit a list in most apps).
+                if list_state is not None and raw_line.strip():
+                    actions.append(KeyAction("Enter"))
+                    list_state = None
+
+                if not is_first_line:
+                    # Emit the newline between lines
+                    actions.append(KeyAction("\n"))   # engine maps \n → Enter/Shift+Enter
+
+                # Type the line content with inline formatting
+                actions.extend(self._parse_inline(raw_line))
+
+            is_first_line = False
+
+        return actions
+
+    # ─── Private Helpers ─────────────────────────────────────────────────────
+
+    def _indent_depth(self, indent_str: str) -> int:
+        """
+        Convert a leading-whitespace string to a 0-based nesting depth.
+        Tab counts as one level; every 2 spaces count as one level.
+        """
+        tabs   = indent_str.count("\t")
+        spaces = indent_str.count(" ")
+        return tabs + (spaces // 2)
+
+    def _parse_inline(self, text: str) -> List[Action]:
+        """
+        Parse inline Markdown (bold, italic, underline) within a single line
+        of text and return a sequence of TypeActions / KeyActions.
+
+        Precedence (parsed in order, highest first):
+          1. ___text___   → underline  (triple underscore, checked before double)
+          2. **text**     → bold
+          3. __text__     → bold  (double underscore)
+          4. *text*       → italic
+          5. _text_       → italic (single underscore, checked last)
+        """
+        actions: List[Action] = []
+        # Build a single regex that matches all inline markers.
+        # Named groups let us identify which marker was matched.
+        pattern = re.compile(
+            r'(?P<underline>___(?P<u_text>.+?)___)'
+            r'|(?P<bold_star>\*\*(?P<bs_text>.+?)\*\*)'
+            r'|(?P<bold_us>__(?P<bu_text>.+?)__)'
+            r'|(?P<italic_star>\*(?P<is_text>.+?)\*)'
+            r'|(?P<italic_us>_(?P<iu_text>.+?)_)',
+            re.DOTALL
+        )
+
+        pos = 0
+        for m in pattern.finditer(text):
+            start, end = m.span()
+
+            # Emit any plain text before this match
+            if pos < start:
+                actions.append(TypeAction(text[pos:start]))
+
+            if m.group("underline"):
+                inner = m.group("u_text")
+                actions.append(KeyAction(f"{self._mod}+u"))
+                actions.extend(self._parse_inline(inner))
+                actions.append(KeyAction(f"{self._mod}+u"))
+
+            elif m.group("bold_star") or m.group("bold_us"):
+                inner = m.group("bs_text") or m.group("bu_text")
+                actions.append(KeyAction(f"{self._mod}+b"))
+                actions.extend(self._parse_inline(inner))
+                actions.append(KeyAction(f"{self._mod}+b"))
+
+            elif m.group("italic_star") or m.group("italic_us"):
+                inner = m.group("is_text") or m.group("iu_text")
+                actions.append(KeyAction(f"{self._mod}+i"))
+                actions.extend(self._parse_inline(inner))
+                actions.append(KeyAction(f"{self._mod}+i"))
+
+            pos = end
+
+        # Emit any trailing plain text
+        if pos < len(text):
+            actions.append(TypeAction(text[pos:]))
+
+        return actions
+
+
+def _platform_string() -> str:
+    """Return a short platform identifier for the current OS."""
+    return "mac" if sys.platform == "darwin" else "win"

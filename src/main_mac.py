@@ -15,6 +15,9 @@ from playwright.sync_api import sync_playwright
 
 from engine import TypingEngine
 from os_layer.playwright_driver_mac import PlaywrightDriverMac
+from first_run import ensure_settings_file, check_chrome_installed, show_chrome_required_dialog
+from updater import Updater
+from version import __version__
 
 
 def create_image(color):
@@ -32,17 +35,28 @@ class MainApp:
         self.tray_icon = None
         self._hotkey_listener = None
         self._esc_listener = None
+        self.updater = Updater(on_update_available=self._on_update_available)
+        self._pending_update_version = None
 
     def start(self):
+        # First-run setup: ensure settings.ini exists
+        ensure_settings_file()
+
+        # Check that Chrome is installed (non-blocking warning if missing)
+        if not check_chrome_installed():
+            show_chrome_required_dialog()
+
         def setup_icon(icon):
             self.tray_icon.visible = True
             threading.Thread(target=self.playwright_worker, daemon=True).start()
+            # Check for updates in the background (non-blocking)
+            self.updater.check_in_background()
 
         # Setup System Tray (Must be on main thread for macOS)
-        self.tray_icon = pystray.Icon("FlowState", create_image("#0078D7"), "FlowState: Starting...")
+        self.tray_icon = pystray.Icon("FlowState", create_image("#0078D7"), f"FlowState v{__version__}: Starting...")
         self.tray_icon.menu = pystray.Menu(item("Starting up...", lambda: None, enabled=False))
 
-        print("FlowState starting... look for the menu bar icon.")
+        print(f"FlowState v{__version__} starting... look for the menu bar icon.")
         self.tray_icon.run(setup=setup_icon)
 
     def update_tray(self):
@@ -81,6 +95,14 @@ class MainApp:
                 menu_items.append(item(f"{prefix}{f_name}: {c_val}", lambda: None, enabled=False))
 
             menu_items.append(item("---", lambda: None, enabled=False))
+
+            # Show update menu item if available
+            if self._pending_update_version:
+                menu_items.append(item(
+                    f"⬆ Update to v{self._pending_update_version}",
+                    self._do_update
+                ))
+
             menu_items.append(item("⚙ Settings...", self.open_settings))
             menu_items.append(item("Exit FlowState", self.exit_app))
 
@@ -160,6 +182,16 @@ class MainApp:
         esc_listener.daemon = True
         esc_listener.start()
         self._esc_listener = esc_listener
+
+    def _on_update_available(self, version, download_path):
+        """Called by the Updater (from background thread) when a new version is ready."""
+        print(f"Update available: v{version} → {download_path}")
+        self._pending_update_version = version
+        self.update_tray()  # Refresh menu to show update item
+
+    def _do_update(self):
+        """Launch the downloaded installer and exit."""
+        self.updater.launch_installer_and_exit()
 
     def exit_app(self):
         if self._hotkey_listener:

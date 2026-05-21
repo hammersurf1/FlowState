@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+from rich_text_formatter import RichTextFormatter, TypeAction, KeyAction, _platform_string
+
 class StopTypingException(Exception):
     pass
 
@@ -51,7 +53,7 @@ class TypingEngine:
             "TypoDelay": 125, "RevisionChance": 5, "SentencePauseMs": 1200, 
             "ParagraphPauseMs": 2000, "BrainstormFrequency": 60, "EmojiPauseMs": 1800,
             "UseEnterOnly": 0, "EnableTypos": 1, "EnableRevisions": 1,
-            "EnableBrainstormPauses": 1,
+            "EnableBrainstormPauses": 1, "EnableRichText": 1,
         }
         self.default_hotkeys = {
             "TriggerHotkey": "ctrl+alt+v",
@@ -61,6 +63,9 @@ class TypingEngine:
         self.settings = self.defaults.copy()
         self.hotkeys = self.default_hotkeys.copy()
         self.load_settings()
+
+        # Rich text formatter — platform detected once at startup
+        self._formatter = RichTextFormatter(platform=_platform_string())
 
         self.settings_list =["UserMeanDelay", "UserVariance", "TypoChance", "TypoDelay", "RevisionChance"]
         self.setting_names =["Typing Speed (Lower is Faster)", "Variance", "Typo Chance (%)", "Typo Correction Speed", "Base Revision Chance (%)"]
@@ -113,6 +118,7 @@ class TypingEngine:
             'EnableTypos': str(self.settings['EnableTypos']),
             'EnableRevisions': str(self.settings['EnableRevisions']),
             'EnableBrainstormPauses': str(self.settings['EnableBrainstormPauses']),
+            'EnableRichText': str(self.settings['EnableRichText']),
         }
         self.config['Hotkeys'] = {
             'TriggerHotkey': self.hotkeys['TriggerHotkey'],
@@ -206,14 +212,59 @@ class TypingEngine:
             layout_name = self.driver.detect_layout()
             neighbor_map = LAYOUTS.get(layout_name, LAYOUTS["QWERTY"])
 
-            total_len = len(clipboard_text)
-            self.current_momentum = 0
-            words_typed_in_sentence = 0
-            current_word_buffer = ""
-            just_corrected_word = False
-            
-            i = 0
-            while i < total_len:
+            if self.settings["EnableRichText"]:
+                # Parse clipboard into an ordered action list and execute it.
+                # TypeActions go through the full human-rhythm / typo loop.
+                # KeyActions (formatting shortcuts, Enter, Tab) are pressed directly.
+                actions = self._formatter.parse(clipboard_text)
+                self._execute_actions(actions, neighbor_map)
+            else:
+                # Legacy plain-text path (unchanged)
+                self._type_plain_text(clipboard_text, neighbor_map)
+
+        except StopTypingException:
+            pass
+
+        # Completely sever the Playwright connection when typing finishes
+        self.driver.detach()
+        self.set_state(running=False, paused=False)
+
+    # ─── Action Dispatcher ───────────────────────────────────────────────────
+
+    def _execute_actions(self, actions, neighbor_map):
+        """Execute a pre-parsed list of TypeAction / KeyAction objects."""
+        for action in actions:
+            self._sleep(0)  # honour pause/stop between actions
+            if isinstance(action, TypeAction):
+                self._type_plain_text(action.text, neighbor_map)
+            elif isinstance(action, KeyAction):
+                shortcut = action.shortcut
+                # Map the engine's newline sentinel to the correct key
+                if shortcut == "\n":
+                    if self.settings["UseEnterOnly"]:
+                        shortcut = "Enter"
+                    else:
+                        shortcut = "Shift+Enter"
+                # Small human-like pause before the shortcut
+                self._sleep(random.randint(60, 130) / 1000.0)
+                self.driver.send_key(shortcut)
+                # Small pause after the shortcut
+                self._sleep(random.randint(60, 130) / 1000.0)
+                self.current_momentum = 0
+
+    # ─── Plain-text Typing Loop ──────────────────────────────────────────────
+
+    def _type_plain_text(self, clipboard_text, neighbor_map):
+        """The original character-by-character typing loop with full typo/rhythm
+        logic. Called for TypeAction segments and as the plain-text fallback."""
+        total_len = len(clipboard_text)
+        self.current_momentum = 0
+        words_typed_in_sentence = 0
+        current_word_buffer = ""
+        just_corrected_word = False
+        
+        i = 0
+        while i < total_len:
                 self._sleep(0)
 
                 char = clipboard_text[i]
@@ -370,12 +421,7 @@ class TypingEngine:
 
                 i += 1
 
-        except StopTypingException:
-            pass
-
-        # Completely sever the Playwright connection when typing finishes
-        self.driver.detach()
-        self.set_state(running=False, paused=False)
+        # (StopTypingException propagates up to trigger_typing)
 
     def handle_esc(self):
         current_time = time.time()

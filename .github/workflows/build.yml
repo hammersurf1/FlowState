@@ -1,8 +1,9 @@
 name: Build Installers
 
-# This allows you to manually trigger the build from the GitHub website
 on:
   workflow_dispatch:
+  push:
+    tags: ["v*"]
 
 jobs:
   build-windows:
@@ -16,19 +17,31 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Read Version
+        id: version
+        shell: python
+        run: |
+          import re, os
+          m = re.search(r'version\s*=\s*"(.+?)"', open('pyproject.toml').read())
+          ver = m.group(1)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'version={ver}\n')
+
+      - name: Sync version.py
+        run: echo '__version__ = "${{ steps.version.outputs.version }}"' > src/version.py
+
       - name: Install Dependencies
         run: |
           pip install -r requirements_win.txt
           pip install pyinstaller
 
-      - name: Build Windows EXE
-        run: pyinstaller --noconsole --onefile --uac-admin --name="FlowState" --hidden-import settings_gui --collect-all playwright src\main_win.py
+      - name: Build (onedir)
+        run: pyinstaller FlowState.spec --clean --noconfirm
 
-      - name: Create Windows Installer (Inno Setup)
-        # Inno Setup is conveniently pre-installed on GitHub's Windows cloud servers!
+      - name: Create Installer (Inno Setup)
         run: iscc build_scripts\windows_setup.iss
 
-      - name: Upload Windows Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: FlowState-Windows-Installer
@@ -45,21 +58,66 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Read Version
+        id: version
+        shell: python
+        run: |
+          import re, os
+          m = re.search(r'version\s*=\s*"(.+?)"', open('pyproject.toml').read())
+          ver = m.group(1)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'version={ver}\n')
+
+      - name: Sync version.py
+        run: echo '__version__ = "${{ steps.version.outputs.version }}"' > src/version.py
+
       - name: Install Dependencies
         run: |
           pip install -r requirements_mac.txt
           pip install pyinstaller
 
-      - name: Build Mac App
-        run: pyinstaller --windowed --onefile --name="FlowState" --hidden-import settings_gui --collect-all playwright src/main_mac.py
+      - name: Build .app
+        run: pyinstaller FlowState_mac.spec --clean --noconfirm
 
-      - name: Create Mac DMG Installer
-        # We use Apple's built-in hdiutil tool to package the .app into a .dmg
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Create DMG
         run: |
-          hdiutil create -volname "FlowState" -srcfolder dist/FlowState.app -ov -format UDZO dist/FlowState_Mac_Installer.dmg
+          create-dmg \
+            --volname "FlowState" \
+            --volicon "assets/logo.icns" \
+            --background "assets/installer/dmg_background.png" \
+            --window-pos 200 120 \
+            --window-size 660 400 \
+            --icon-size 80 \
+            --icon "FlowState.app" 180 200 \
+            --app-drop-link 480 200 \
+            --hide-extension "FlowState.app" \
+            --no-internet-enable \
+            "dist/FlowState_Mac_Installer.dmg" \
+            "dist/FlowState.app" || true
 
-      - name: Upload Mac Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: FlowState-Mac-Installer
           path: dist/FlowState_Mac_Installer.dmg
+
+  release:
+    needs: [build-windows, build-mac]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            FlowState-Windows-Installer/FlowState_Windows_Setup.exe
+            FlowState-Mac-Installer/FlowState_Mac_Installer.dmg
