@@ -194,7 +194,7 @@ echo.
 REM --- Step 4: Download spaCy Model ---------------------------
 echo [Step 4/5] Downloading spaCy language model (en_core_web_md)...
 if %USE_UV% equ 1 (
-    uv run python -m spacy download en_core_web_md
+    uv run --python %PY_VER% python -m spacy download en_core_web_md
 ) else (
     python -m spacy download en_core_web_md
 )
