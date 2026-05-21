@@ -1,20 +1,9 @@
 #!/bin/bash
 # ============================================================
 #  FlowState - macOS Manual Setup
-#  This script sets up a local Python environment and installs
-#  all dependencies needed to run FlowState on macOS.
-#
-#  WHAT THIS SCRIPT DOES (nothing hidden):
-#    1. Checks for uv or Python 3
-#    2. Creates a virtual environment in .venv/
-#    3. Installs Python packages from requirements_mac.txt
-#    4. Downloads the spaCy language model
-#    5. Prints instructions for how to run FlowState
-#
-#  WHAT THIS SCRIPT DOES NOT DO:
-#    - It does NOT install anything system-wide
-#    - It does NOT require sudo or root access
-#    - It does NOT modify system preferences
+#  Enforces Python 3.11-3.12 (spaCy has no wheels for 3.13+).
+#  If the wrong version is found, the script installs 3.12
+#  automatically (via uv if available) or prompts for manual install.
 # ============================================================
 
 set -e
@@ -25,6 +14,11 @@ echo "  FlowState - macOS Setup"
 echo " ============================================="
 echo ""
 
+# --- Constants ------------------------------------------------
+PY_MAJOR=3
+PY_MINOR=12
+PY_VER="${PY_MAJOR}.${PY_MINOR}"
+
 # --- Detect uv ------------------------------------------------
 USE_UV=0
 if command -v uv &> /dev/null; then
@@ -33,45 +27,112 @@ if command -v uv &> /dev/null; then
     echo ""
 fi
 
-# --- Step 1: Check Python --------------------------------------
-echo "[Step 1/4] Checking for Python 3..."
+# --- Helper: parse version from "Python 3.12.x" ---------------
+parse_python_version() {
+    local cmd="$1"
+    local ver_str
+    ver_str=$("$cmd" --version 2>&1)
+    echo "$ver_str" | awk '{print $2}'
+}
+
+# --- Helper: check if version is acceptable -------------------
+is_version_acceptable() {
+    local ver="$1"
+    local maj min
+    maj=$(echo "$ver" | cut -d. -f1)
+    min=$(echo "$ver" | cut -d. -f2)
+
+    if [ "$maj" -ne 3 ]; then
+        return 1
+    fi
+    if [ "$min" -lt 11 ] || [ "$min" -gt 12 ]; then
+        return 1
+    fi
+    return 0
+}
+
+# --- Step 0: Enforce Python 3.12 -----------------------------
+echo "[Step 0/5] Ensuring Python ${PY_VER} is available..."
+PYTHON_CMD=""
 
 if [ "$USE_UV" -eq 1 ]; then
-    if uv python find &> /dev/null; then
-        echo "  OK"
+    # uv can manage its own Python. Check if 3.12 is already installed.
+    if uv python find "$PY_VER" &> /dev/null; then
+        echo "  uv-managed Python ${PY_VER} found."
+        PYTHON_CMD="$(uv python find "$PY_VER")"
     else
-        echo "  No Python found, uv will download one automatically."
+        echo "  Installing Python ${PY_VER} via uv (this may take a moment)..."
+        uv python install "$PY_VER"
+        PYTHON_CMD="$(uv python find "$PY_VER")"
     fi
 else
-    if ! command -v python3 &> /dev/null; then
+    # Check python3, python, py in order
+    for candidate in python3 python py; do
+        if command -v "$candidate" &> /dev/null; then
+            ver=$(parse_python_version "$candidate")
+            if is_version_acceptable "$ver"; then
+                PYTHON_CMD="$candidate"
+                break
+            fi
+        fi
+    done
+
+    if [ -z "$PYTHON_CMD" ]; then
         echo ""
-        echo "  ERROR: Python 3 is not installed."
-        echo "  Install it with Homebrew:  brew install python"
-        echo "  Or download from:         https://www.python.org/downloads/"
+        echo "  ERROR: No suitable Python found."
+        echo ""
+        echo "  FlowState requires Python 3.11 or 3.12."
+        echo "  spaCy does not yet provide pre-built wheels for Python 3.13+."
+        echo ""
+        echo "  To install Python ${PY_VER}:"
+        echo ""
+        echo "    Option A - Homebrew (recommended):"
+        echo "      brew install python@${PY_MINOR}"
+        echo ""
+        echo "    Option B - Official installer:"
+        echo "      https://www.python.org/downloads/release/python-31210/"
+        echo ""
+        echo "    Option C - Install uv (handles Python automatically):"
+        echo "      curl -LsSf https://astral.sh/uv/install.sh | sh"
         echo ""
         exit 1
     fi
-    python3 --version
-    echo "  OK"
 fi
+
+echo "  OK  (${PYTHON_CMD})"
+echo ""
+
+# --- Step 1: Verify version (guard) ---------------------------
+echo "[Step 1/5] Verifying Python version..."
+RAW_VER=$(parse_python_version "$PYTHON_CMD")
+echo "  Python ${RAW_VER}"
+
+if ! is_version_acceptable "$RAW_VER"; then
+    echo ""
+    echo "  ERROR: Python ${RAW_VER} is not supported."
+    echo "  Only Python 3.11 and 3.12 are supported (spaCy wheel availability)."
+    echo ""
+    exit 1
+fi
+echo "  OK  (Python ${RAW_VER} is supported)"
 echo ""
 
 # --- Step 2: Create Virtual Environment -------------------------
-echo "[Step 2/4] Creating virtual environment in .venv/ ..."
+echo "[Step 2/5] Creating virtual environment in .venv/ ..."
 if [ -d ".venv" ]; then
     echo "  .venv already exists, skipping creation."
 else
     if [ "$USE_UV" -eq 1 ]; then
-        uv venv .venv
+        uv venv --python "$PY_VER" .venv
     else
-        python3 -m venv .venv
+        "$PYTHON_CMD" -m venv .venv
     fi
 fi
 echo "  OK"
 echo ""
 
 # --- Step 3: Install Dependencies ------------------------------
-echo "[Step 3/4] Installing dependencies from requirements_mac.txt..."
+echo "[Step 3/5] Installing dependencies from requirements_mac.txt..."
 if [ "$USE_UV" -eq 1 ]; then
     uv pip install -r requirements_mac.txt
 else
@@ -82,7 +143,7 @@ echo "  OK"
 echo ""
 
 # --- Step 4: Download spaCy Model -----------------------------
-echo "[Step 4/4] Downloading spaCy language model (en_core_web_md)..."
+echo "[Step 4/5] Downloading spaCy language model (en_core_web_md)..."
 if [ "$USE_UV" -eq 1 ]; then
     uv run python -m spacy download en_core_web_md
 else
