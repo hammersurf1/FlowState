@@ -36,7 +36,8 @@ jobs:
           pip install pyinstaller
 
       - name: Download spaCy Model
-        run: python -m spacy download en_core_web_md
+        run: |
+          pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.7.1/en_core_web_md-3.7.1.tar.gz
 
       - name: Build (onedir)
         run: pyinstaller FlowState.spec --clean --noconfirm
@@ -91,7 +92,8 @@ jobs:
           pip install pyinstaller
 
       - name: Download spaCy Model
-        run: python -m spacy download en_core_web_md
+        run: |
+          pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.7.1/en_core_web_md-3.7.1.tar.gz
 
       - name: Build .app
         run: pyinstaller FlowState_mac.spec --clean --noconfirm

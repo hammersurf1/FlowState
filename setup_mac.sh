@@ -145,9 +145,9 @@ echo ""
 # --- Step 4: Download spaCy Model -----------------------------
 echo "[Step 4/5] Downloading spaCy language model (en_core_web_md)..."
 if [ "$USE_UV" -eq 1 ]; then
-    uv run python -m spacy download en_core_web_md
+    uv pip install "https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.7.1/en_core_web_md-3.7.1.tar.gz"
 else
-    python3 -m spacy download en_core_web_md
+    .venv/bin/pip install "https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.7.1/en_core_web_md-3.7.1.tar.gz"
 fi
 echo "  OK"
 echo ""
