@@ -22,16 +22,15 @@ class PlaywrightDriverWin:
         try:
             self.browser = self.p.chromium.connect_over_cdp('http://localhost:9225')
         except Exception:
-            print("Not found. Attempting to auto-launch Chrome...")
+            print("Not found. Attempting to relaunch Chrome with debugging port...")
             if self._auto_launch_chrome():
-                time.sleep(3)
+                time.sleep(4)
                 try:
                     self.browser = self.p.chromium.connect_over_cdp('http://localhost:9225')
                 except Exception:
                     raise Exception(
-                        "Failed to open debugging port. If Chrome is already running, "
-                        "you MUST completely close it or launch it with "
-                        "--remote-debugging-port=9225 first!"
+                        "Failed to connect to Chrome on debugging port 9225 after relaunch. "
+                        "Chrome may have crashed or the port may be blocked by another process."
                     )
             else:
                 raise Exception("Could not find Google Chrome installed.")
@@ -67,11 +66,48 @@ class PlaywrightDriverWin:
         if not chrome_exe:
             return False
 
-        profile_dir = r"C:\chrome-stealth-profile"
+        # Check if Chrome is already running
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq chrome.exe"],
+                capture_output=True, text=True, timeout=10
+            )
+            chrome_was_running = "chrome.exe" in result.stdout.lower()
+        except Exception:
+            chrome_was_running = False
+
+        if chrome_was_running:
+            print("Chrome is running. Closing it to reopen with debugging port...")
+            # Graceful shutdown
+            subprocess.run(
+                ["taskkill", "/IM", "chrome.exe"],
+                capture_output=True, timeout=15
+            )
+            # Wait up to 5 seconds for graceful exit
+            for _ in range(10):
+                time.sleep(0.5)
+                result = subprocess.run(
+                    ["tasklist", "/FI", "IMAGENAME eq chrome.exe"],
+                    capture_output=True, text=True, timeout=10
+                )
+                if "chrome.exe" not in result.stdout.lower():
+                    break
+            else:
+                # Force kill
+                print("Force-killing Chrome...")
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", "chrome.exe"],
+                    capture_output=True, timeout=15
+                )
+                time.sleep(1)
+
+        # Launch Chrome with the user's real default profile + debugging port.
+        # No --user-data-dir so it uses %LOCALAPPDATA%\Google\Chrome\User Data
+        # --restore-last-session ensures tabs come back after the unclean shutdown.
         subprocess.Popen([
             chrome_exe,
             "--remote-debugging-port=9225",
-            f"--user-data-dir={profile_dir}"
+            "--restore-last-session"
         ])
         return True
 
