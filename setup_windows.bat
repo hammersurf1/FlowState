@@ -90,16 +90,17 @@ exit /b 1
 
 REM --- uv: ensure Python is available ----------------------------
 :uv_ensure_python
-uv python find %PY_VER% >nul 2>nul
+uv python find %PY_VER% >"%VER_FILE%" 2>nul
 if %errorlevel% equ 0 (
     echo   uv-managed Python %PY_VER% found.
-    set "PYTHON_CMD=uv run --python %PY_VER% python"
+    set /p PYTHON_CMD=<"%VER_FILE%"
     exit /b 0
 )
 echo   Installing Python %PY_VER% via uv (this may take a moment)...
 uv python install %PY_VER%
 if %errorlevel% neq 0 exit /b 1
-set "PYTHON_CMD=uv run --python %PY_VER% python"
+uv python find %PY_VER% >"%VER_FILE%"
+set /p PYTHON_CMD=<"%VER_FILE%"
 exit /b 0
 
 REM --- non-uv: find system python ------------------------------
