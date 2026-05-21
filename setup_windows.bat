@@ -23,28 +23,49 @@ echo   FlowState - Windows Setup
 echo  =============================================
 echo.
 
-REM ── Step 1: Check Python ──────────────────────────────────────
-echo [Step 1/3] Checking for Python...
-python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo.
-    echo  ERROR: Python is not installed or not on your PATH.
-    echo  Please install Python 3.10+ from https://www.python.org/downloads/
-    echo  Make sure to check "Add Python to PATH" during installation.
-    echo.
-    pause
-    exit /b 1
+REM --- Step 1: Check Python -----------------------------------
+echo [Step 1/4] Checking for Python...
+
+REM Try py launcher first (most reliable on Windows), then python, then python3
+set PYTHON_CMD=
+py --version >nul 2>&1
+if %errorlevel% equ 0 (
+    set PYTHON_CMD=py
+    goto :python_found
 )
-python --version
+python --version >nul 2>&1
+if %errorlevel% equ 0 (
+    set PYTHON_CMD=python
+    goto :python_found
+)
+python3 --version >nul 2>&1
+if %errorlevel% equ 0 (
+    set PYTHON_CMD=python3
+    goto :python_found
+)
+
+REM None found - show error and exit
+echo.
+echo  ERROR: Python is not installed or not on your PATH.
+echo.
+echo  Please install Python 3.10+ from https://www.python.org/downloads/
+echo  During installation, CHECK "Add Python to PATH" and 
+echo  CHECK "Install py launcher".
+echo.
+pause
+exit /b 1
+
+:python_found
+%PYTHON_CMD% --version
 echo   OK
 echo.
 
-REM ── Step 2: Create Virtual Environment ────────────────────────
-echo [Step 2/3] Creating virtual environment in .venv\ ...
+REM --- Step 2: Create Virtual Environment ---------------------
+echo [Step 2/4] Creating virtual environment in .venv\ ...
 if exist .venv (
     echo   .venv already exists, skipping creation.
 ) else (
-    python -m venv .venv
+    %PYTHON_CMD% -m venv .venv
     if %errorlevel% neq 0 (
         echo  ERROR: Failed to create virtual environment.
         pause
@@ -54,7 +75,7 @@ if exist .venv (
 echo   OK
 echo.
 
-REM ── Step 3: Install Dependencies ─────────────────────────────
+REM --- Step 3: Install Dependencies --------------------------
 echo [Step 3/4] Installing dependencies from requirements_win.txt...
 call .venv\Scripts\activate.bat
 pip install -r requirements_win.txt
@@ -67,7 +88,7 @@ if %errorlevel% neq 0 (
 echo   OK
 echo.
 
-REM ── Step 4: Download spaCy Model ─────────────────────────────
+REM --- Step 4: Download spaCy Model --------------------------
 echo [Step 4/4] Downloading spaCy language model (en_core_web_md)...
 python -m spacy download en_core_web_md
 if %errorlevel% neq 0 (
@@ -79,7 +100,7 @@ if %errorlevel% neq 0 (
 echo   OK
 echo.
 
-REM ── Done ─────────────────────────────────────────────────────
+REM --- Done --------------------------------------------------
 echo  =============================================
 echo   Setup complete!
 echo  =============================================
