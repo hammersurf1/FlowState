@@ -268,6 +268,28 @@ class SettingsWindow:
             "Enable rich-text formatting (bold, italic, lists, headings, etc.)"
         )
 
+        self._add_section(parent, "Semantic Humanization")
+        self._add_checkbox(
+            parent, "EnableSmartRevisions",
+            "Smart revisions — type a similar word, backspace, then correct"
+        )
+        self._add_checkbox(
+            parent, "EnableSemanticSpeed",
+            "Semantic speed — rare words slower, common words faster"
+        )
+        self._add_checkbox(
+            parent, "EnableEntityCare",
+            "Entity care — fewer typos on named entities (people, places, orgs)"
+        )
+        self._add_checkbox(
+            parent, "EnableClausePauses",
+            "Clause pauses — micro-pauses at subordinate clause boundaries"
+        )
+        self._add_checkbox(
+            parent, "EnableChunkBurst",
+            "Chunk burst — type noun phrases as single cognitive bursts"
+        )
+
     def _build_hotkeys_tab(self, parent):
         self._add_section(parent, "Hotkey Configuration")
 

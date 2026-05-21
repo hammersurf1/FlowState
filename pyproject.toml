@@ -12,4 +12,5 @@ dependencies = [
     "pynput>=1.8.1",
     "pyperclip>=1.11.0",
     "pystray>=0.19.5",
+    "spacy>=3.7.0",
 ]

@@ -76,6 +76,7 @@ FlowState is a cross-platform typing simulator designed for intelligent humanlik
 ### Built With
 
 * [![Python][Python.org]][Python-url]
+* [![spaCy][spaCy.io]][spaCy-url]
 * [![Pillow][Pillow.readthedocs.io]][Pillow-url]
 * [![PyPI][PyPI.org]][PyPI-url]
 
@@ -126,6 +127,7 @@ If you prefer to run from source, or you want to inspect exactly what FlowState 
    - Check that Python 3 is installed
    - Create a virtual environment in `.venv/`
    - Install dependencies from the platform-specific requirements file
+   - Download the spaCy `en_core_web_md` model
    - Print clear instructions for running the app
 
 3. **Run FlowState:**
@@ -208,6 +210,18 @@ The icon gives a live status readout. It shows the active setting's short name a
 | 🟢 Green | Typing / countdown |
 | 🟠 Orange | Paused |
 
+### Semantic Humanization
+
+FlowState uses **spaCy** with the `en_core_web_md` model to make typing feel genuinely human. These features can be toggled individually in Settings under the *Semantic Humanization* section:
+
+| Feature | What it does |
+|---|---|
+| **Smart Revisions** | Occasionally types a semantically similar word first, hesitates, backspaces, and types the correct word. Only triggers on nouns, verbs, and adjectives. |
+| **Semantic Speed** | Adjusts typing speed based on word frequency. Common words (e.g., "the", "and") flow faster; rare words slow down slightly. |
+| **Entity Care** | Named entities (people, companies, places) are typed with extra care — fewer typos and steadier rhythm. |
+| **Clause Pauses** | Uses dependency parsing to insert micro-pauses at the end of subordinate clauses, not just at sentence boundaries. |
+| **Chunk Burst** | Treats noun phrases like "the quarterly results" as a single cognitive burst, reducing hesitation inside the phrase. |
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- TRANSPARENCY -->
@@ -240,9 +254,9 @@ The setup scripts echo every step they perform. The source code is MIT-licensed 
 - [x] Windows Support
 - [x] macOS Support
 - [x] Custom Macro Support
+- [x] Intelligent revision history w/ NLP
 - [ ] Linux Driver Implementation
 - [ ] Profile Saving/Loading
-- [ ] Intelligent revision history w/ NLP
 
 See the [open issues](https://github.com/hammersurf1/FlowState/issues) for a full list of proposed features (and known issues).
 
@@ -304,6 +318,8 @@ Distributed under the MIT License. See `LICENSE` for more information.
 
 [Python.org]: https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white
 [Python-url]: https://www.python.org/
+[spaCy.io]: https://img.shields.io/badge/spaCy-09A3D5?style=for-the-badge&logo=spacy&logoColor=white
+[spaCy-url]: https://spacy.io/
 [Pillow.readthedocs.io]: https://img.shields.io/badge/Pillow-111111?style=for-the-badge&logo=python&logoColor=white
 [Pillow-url]: https://python-pillow.org/
 [PyPI.org]: https://img.shields.io/badge/PyPI-3775A9?style=for-the-badge&logo=pypi&logoColor=white

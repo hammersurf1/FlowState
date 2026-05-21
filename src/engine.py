@@ -8,6 +8,8 @@ import subprocess
 import sys
 
 from rich_text_formatter import RichTextFormatter, TypeAction, KeyAction, _platform_string
+from semantic_analyzer import SemanticAnalyzer
+from typing_planner import TypingPlanner
 
 class StopTypingException(Exception):
     pass
@@ -49,11 +51,14 @@ class TypingEngine:
         self.config = configparser.ConfigParser()
         
         self.defaults = {
-            "UserMeanDelay": 35, "UserVariance": 45, "TypoChance": 3, 
-            "TypoDelay": 125, "RevisionChance": 5, "SentencePauseMs": 1200, 
+            "UserMeanDelay": 35, "UserVariance": 45, "TypoChance": 3,
+            "TypoDelay": 125, "RevisionChance": 5, "SentencePauseMs": 1200,
             "ParagraphPauseMs": 2000, "BrainstormFrequency": 60, "EmojiPauseMs": 1800,
             "UseEnterOnly": 0, "EnableTypos": 1, "EnableRevisions": 1,
             "EnableBrainstormPauses": 1, "EnableRichText": 1,
+            "EnableSemanticSpeed": 1, "EnableClausePauses": 1,
+            "EnableChunkBurst": 1, "EnableSmartRevisions": 1,
+            "EnableEntityCare": 1,
         }
         self.default_hotkeys = {
             "TriggerHotkey": "ctrl+alt+v",
@@ -67,6 +72,10 @@ class TypingEngine:
         # Rich text formatter — platform detected once at startup
         self._formatter = RichTextFormatter(platform=_platform_string())
 
+        # Semantic layer (lazy-loaded so the app starts fast even if spaCy is heavy)
+        self._analyzer: SemanticAnalyzer | None = None
+        self._planner: TypingPlanner | None = None
+
         self.settings_list =["UserMeanDelay", "UserVariance", "TypoChance", "TypoDelay", "RevisionChance"]
         self.setting_names =["Typing Speed (Lower is Faster)", "Variance", "Typo Chance (%)", "Typo Correction Speed", "Base Revision Chance (%)"]
         self.current_setting_index = 0
@@ -79,6 +88,11 @@ class TypingEngine:
 
         self.ui_update_callback = None
         self.status_callback = None
+
+    def _ensure_semantic_layer(self):
+        if self._analyzer is None:
+            self._analyzer = SemanticAnalyzer()
+            self._planner = TypingPlanner(self._analyzer)
 
     def load_settings(self):
         if self.ini_file.exists():
@@ -119,6 +133,11 @@ class TypingEngine:
             'EnableRevisions': str(self.settings['EnableRevisions']),
             'EnableBrainstormPauses': str(self.settings['EnableBrainstormPauses']),
             'EnableRichText': str(self.settings['EnableRichText']),
+            'EnableSemanticSpeed': str(self.settings['EnableSemanticSpeed']),
+            'EnableClausePauses': str(self.settings['EnableClausePauses']),
+            'EnableChunkBurst': str(self.settings['EnableChunkBurst']),
+            'EnableSmartRevisions': str(self.settings['EnableSmartRevisions']),
+            'EnableEntityCare': str(self.settings['EnableEntityCare']),
         }
         self.config['Hotkeys'] = {
             'TriggerHotkey': self.hotkeys['TriggerHotkey'],
@@ -255,14 +274,208 @@ class TypingEngine:
     # ─── Plain-text Typing Loop ──────────────────────────────────────────────
 
     def _type_plain_text(self, clipboard_text, neighbor_map):
+        """Entry point. Chooses semantic path or legacy path."""
+        semantic_active = any([
+            self.settings["EnableSemanticSpeed"],
+            self.settings["EnableClausePauses"],
+            self.settings["EnableChunkBurst"],
+            self.settings["EnableSmartRevisions"],
+            self.settings["EnableEntityCare"],
+        ])
+
+        if semantic_active:
+            self._ensure_semantic_layer()
+            assert self._planner is not None
+            directives = self._planner.plan(
+                text=clipboard_text,
+                mean_delay=self.settings["UserMeanDelay"],
+                variance=self.settings["UserVariance"],
+            )
+            self._execute_directives(directives, neighbor_map)
+        else:
+            self._legacy_type_plain_text(clipboard_text, neighbor_map)
+
+    def _execute_directives(self, directives, neighbor_map):
+        """Typed-loop over directives instead of raw characters."""
+        for directive in directives:
+            self._sleep(0)
+
+            # --- SMART REVISION: type similar word, pause, backspace, type real word ---
+            if (self.settings["EnableSmartRevisions"]
+                    and directive.revision_candidate
+                    and random.randint(1, 100) <= self.settings["RevisionChance"]):
+                self._simulate_revision(directive, neighbor_map)
+                continue
+
+            # --- CHUNK BURST: lower variance inside noun chunks ---
+            effective_variance = (
+                self.settings["UserVariance"] // 2
+                if (self.settings["EnableChunkBurst"] and directive.chunk_burst)
+                else self.settings["UserVariance"]
+            )
+
+            # --- ENTITY CARE: override typo chance ---
+            effective_typo_chance = self.settings["TypoChance"]
+            if self.settings["EnableEntityCare"] and directive.is_entity:
+                effective_typo_chance = max(0, effective_typo_chance - 2)
+
+            # --- SPEED MODULATION: apply rank-based multiplier ---
+            mean = self.settings["UserMeanDelay"]
+            if self.settings["EnableSemanticSpeed"]:
+                mean = mean * directive.delay_multiplier
+            mean = max(10, mean)
+
+            # Emit characters in this directive
+            for idx, char in enumerate(directive.text):
+                self._sleep(0)
+
+                # Emoji / surrogate pair fast-path
+                char_code = ord(char)
+                if 0xD800 <= char_code <= 0xDBFF or char_code > 0xFFFF:
+                    self._sleep(random.randint(self.settings["EmojiPauseMs"], self.settings["EmojiPauseMs"] + 500) / 1000.0)
+                    self.driver.surgical_paste(char)
+                    self._sleep(self.settings["UserMeanDelay"] / 1000.0)
+                    self.current_momentum = 0
+                    continue
+
+                # Intra-directive typo logic
+                if (self.settings["EnableTypos"]
+                        and effective_typo_chance > 0
+                        and char_code < 128
+                        and char not in [" ", "\n", "\t"]
+                        and random.randint(1, 100) <= effective_typo_chance):
+                    consumed = self._inject_typo(char, directive.text[idx + 1:], neighbor_map)
+                    if consumed:
+                        continue
+
+                # Normal keystroke
+                self._human_keystroke(char)
+
+                # Momentum
+                if directive.momentum_boost and self.current_momentum < 15:
+                    self.current_momentum += 0.5
+
+                # Delay calculation
+                calc_mean = mean - self.current_momentum
+                next_char = directive.text[idx + 1] if idx + 1 < len(directive.text) else ""
+                bigram = (char + next_char).lower()
+                if bigram in ["th", "he", "in", "er", "an", "re", "on", "at", "en",
+                              "nd", "ti", "es", "or", "te", "of", "ed", "is", "it",
+                              "al", "ar", "st", "to", "nt"]:
+                    calc_mean -= 10
+
+                delay = self._gaussian(calc_mean, effective_variance)
+                delay = max(10, min(delay, 250))
+                self._sleep(delay / 1000.0)
+
+            # --- Pause after directive (clause boundaries, etc.) ---
+            if self.settings["EnableClausePauses"] and directive.pause_after_ms:
+                self._sleep(directive.pause_after_ms / 1000.0)
+                self.current_momentum = max(0, self.current_momentum - 3)
+
+            # --- Sentence / paragraph boundary pauses ---
+            stripped = directive.text.rstrip()
+            if stripped and stripped[-1] in [".", "?", "!"]:
+                self._sleep(random.randint(self.settings["SentencePauseMs"], self.settings["SentencePauseMs"] + 400) / 1000.0)
+                self.current_momentum = 0
+            elif stripped and stripped[-1] in [",", ";"]:
+                self._sleep(random.randint(300, 600) / 1000.0)
+                self.current_momentum = max(0, self.current_momentum - 5)
+            elif stripped and stripped[-1] == "\n":
+                if self.settings["UseEnterOnly"]:
+                    self.driver.send_enter()
+                else:
+                    self.driver.send_shift_enter()
+                self._sleep(random.randint(self.settings["ParagraphPauseMs"], self.settings["ParagraphPauseMs"] + 1000) / 1000.0)
+                self.current_momentum = 0
+
+    def _simulate_revision(self, directive, neighbor_map):
+        """Type the similar candidate, hesitate, backspace, then type the real text."""
+        wrong = directive.revision_candidate
+        right = directive.text.strip()
+
+        # Type wrong word
+        for c in wrong:
+            self._human_keystroke(c)
+            self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+
+        # Hesitation (the 'reconsideration' moment)
+        self._sleep(random.randint(500, 1100) / 1000.0)
+
+        # Backspace wrong word
+        for _ in range(len(wrong)):
+            self.driver.send_backspace()
+            self._sleep(random.randint(40, 70) / 1000.0)
+
+        # Pause before choosing correct word
+        self._sleep(random.randint(600, 1200) / 1000.0)
+        self.current_momentum = 0
+
+        # Type correct word with slightly more care (higher delay multiplier)
+        for c in right:
+            self._human_keystroke(c)
+            calc_mean = self.settings["UserMeanDelay"] * 1.15
+            delay = self._gaussian(calc_mean, self.settings["UserVariance"])
+            self._sleep(max(10, delay) / 1000.0)
+
+        # Re-inject trailing whitespace if directive had it
+        trailing_ws = directive.text[len(directive.text.rstrip()):]
+        for c in trailing_ws:
+            self._human_keystroke(c)
+            self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+
+    def _inject_typo(self, char, remaining_text, neighbor_map):
+        """Attempt a single-character typo. Returns True if a typo was injected."""
+        next_char = remaining_text[0] if remaining_text else ""
+        weights = self._get_typo_weights(char, next_char, self.current_momentum, neighbor_map)
+        choices = ["spatial", "transposition", "omission", "doubling"]
+        typo_type = random.choices(choices, weights=weights, k=1)[0]
+
+        typo_chars = ""
+        chars_consumed = 1
+
+        if typo_type == "spatial":
+            neighbor = self._get_neighbor(char, neighbor_map)
+            typo_chars = neighbor if neighbor else char
+        elif typo_type == "transposition":
+            typo_chars = next_char + char
+            chars_consumed = 2
+            self._sleep(max(10, self.settings["UserMeanDelay"] - 15) / 1000.0)
+        elif typo_type == "omission":
+            typo_chars = ""
+        elif typo_type == "doubling":
+            typo_chars = char + char
+
+        for c in typo_chars:
+            self._human_keystroke(c)
+            self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+
+        realization = random.randint(0, 3)
+        buf = remaining_text[:realization]
+        for c in buf:
+            self._human_keystroke(c)
+            self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+
+        self._sleep(random.randint(self.settings["TypoDelay"] * 2, self.settings["TypoDelay"] * 4) / 1000.0)
+
+        back_count = len(typo_chars) + len(buf)
+        for _ in range(back_count):
+            self.driver.send_backspace()
+            self._sleep(random.randint(30, 60) / 1000.0)
+
+        self._sleep(random.randint(100, 200) / 1000.0)
+        self.current_momentum = 0
+        return True
+
+    def _legacy_type_plain_text(self, clipboard_text, neighbor_map):
         """The original character-by-character typing loop with full typo/rhythm
-        logic. Called for TypeAction segments and as the plain-text fallback."""
+        logic. Used when all semantic toggles are disabled."""
         total_len = len(clipboard_text)
         self.current_momentum = 0
         words_typed_in_sentence = 0
         current_word_buffer = ""
         just_corrected_word = False
-        
+
         i = 0
         while i < total_len:
                 self._sleep(0)
@@ -316,12 +529,12 @@ class TypingEngine:
 
                     if typo_type == "spatial":
                         neighbor = self._get_neighbor(char, neighbor_map)
-                        typo_chars = neighbor if neighbor else char 
+                        typo_chars = neighbor if neighbor else char
 
                     elif typo_type == "transposition":
                         typo_chars = next_char + char
-                        chars_consumed = 2 
-                        self._sleep(max(10, self.settings["UserMeanDelay"] - 15) / 1000.0) 
+                        chars_consumed = 2
+                        self._sleep(max(10, self.settings["UserMeanDelay"] - 15) / 1000.0)
 
                     elif typo_type == "omission":
                         typo_chars = ""
