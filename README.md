@@ -70,6 +70,7 @@ FlowState is a cross-platform typing simulator designed for intelligent humanlik
 * **Context Awareness:** Faster typing on common bigrams and realistic pauses at punctuation.
 * **Intelligent Errors:** Simulated mistakes determined by content, followed by realistic correction pauses.
 * **Cognitive Pauses:** Random "thinking" moments and paragraph breaks.
+* **Per-App Profiles:** Override typing settings per application (e.g., fast in Slack, careful in Google Docs).
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -221,6 +222,19 @@ FlowState uses **spaCy** with the `en_core_web_md` model to make typing feel gen
 | **Entity Care** | Named entities (people, companies, places) are typed with extra care — fewer typos and steadier rhythm. |
 | **Clause Pauses** | Uses dependency parsing to insert micro-pauses at the end of subordinate clauses, not just at sentence boundaries. |
 | **Chunk Burst** | Treats noun phrases like "the quarterly results" as a single cognitive burst, reducing hesitation inside the phrase. |
+| **Frequency Typos** | Very common words get fewer typos; rare words get the full typo chance. |
+| **Deferred Corrections** | Sometimes finishes the current word before backspacing a typo, just like a real person would. |
+
+### Motor Realism
+
+Beyond semantic understanding, FlowState models actual motor constraints:
+
+| Feature | What it does |
+|---|---|
+| **Same-Finger Penalty** | Slightly slower when the same finger types two consecutive keys. |
+| **Fluency States** | Alternates between "in the zone" (low variance) and "stumbling" (higher variance) periods. |
+| **Number / Symbol Care** | Digits and symbols are typed more deliberately with fewer typos. |
+| **Caps Lock Realism** | Delay penalty applies only to the first capital in a run, not every capital letter. |
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -255,8 +269,8 @@ The setup scripts echo every step they perform. The source code is MIT-licensed 
 - [x] macOS Support
 - [x] Custom Macro Support
 - [x] Intelligent revision history w/ NLP
+- [x] Per-App Profiles
 - [ ] Linux Driver Implementation
-- [ ] Profile Saving/Loading
 
 See the [open issues](https://github.com/hammersurf1/FlowState/issues) for a full list of proposed features (and known issues).
 

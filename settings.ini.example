@@ -31,3 +31,73 @@ brainstormfrequency = 60
 
 # Pause after typing an emoji (milliseconds)
 emojipausems = 1800
+
+[Behavior]
+# Enable spatial/transposition/omission/doubling typos
+enabletypos = 1
+
+# Enable word-level revisions (type a wrong word, backspace, retype correctly)
+enablerevisions = 1
+
+# Enable random "brainstorm" pauses
+enablebrainstormpauses = 1
+
+# Use plain Enter instead of Shift+Enter for new lines
+useenteronly = 0
+
+# Enable rich-text formatting (bold, italic, lists, headings)
+enablerichtext = 1
+
+# Smart revisions — type a similar word via spaCy, backspace, then correct
+enablesmartrevisions = 1
+
+# Semantic speed — rare words slower, common words faster (spaCy token.rank)
+enablesemanticspeed = 1
+
+# Entity care — fewer typos on named entities (people, places, orgs)
+enableentitycare = 1
+
+# Clause pauses — micro-pauses at subordinate clause boundaries
+enableclausepauses = 1
+
+# Chunk burst — type noun phrases as single cognitive bursts
+enablechunkburst = 1
+
+# Frequency-based typos — common words have fewer typos
+enablefrequencytypos = 1
+
+# Deferred corrections — finish the current word before backspacing a typo
+enabledeferredcorrections = 1
+
+# Same-finger penalty — slower when same finger types two consecutive chars
+enablefingerpenalty = 1
+
+# Fluency states — alternate between fluent and disfluent typing periods
+enablefluencystates = 1
+
+# Number / symbol care — slower, fewer typos on digits and symbols
+enablenumbersymbolcare = 1
+
+# Caps Lock realism — delay on first capital only in a run
+enablecapsrunrealism = 1
+
+[Hotkeys]
+triggerhotkey = ctrl+alt+v
+pausekey = esc
+
+# ─── Per-App Profiles ──────────────────────────────────────────────────────
+# Profiles override typing settings when the active window title matches
+# the WindowPattern (case-insensitive substring match).
+# Example: a Slack profile that types faster with fewer pauses.
+
+# [Profile:Slack]
+# WindowPattern=slack
+# usermeandelay = 25
+# uservariance = 35
+# typochance = 2
+# enableclausepauses = 0
+
+# [Profile:Google Docs]
+# WindowPattern=docs.google.com
+# usermeandelay = 45
+# uservariance = 50

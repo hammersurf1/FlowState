@@ -35,11 +35,75 @@ LAYOUTS = {
     }
 }
 
+# Finger IDs per layout: 0=LP, 1=LR, 2=LM, 3=LI, 4=RI, 5=RM, 6=RR, 7=RP, 8=thumb
+FINGER_MAPS = {
+    "QWERTY": {
+        "q":0,"w":1,"e":2,"r":3,"t":3,"y":4,"u":4,"i":5,"o":6,"p":7,
+        "a":0,"s":1,"d":2,"f":3,"g":3,"h":4,"j":4,"k":5,"l":6,
+        "z":0,"x":1,"c":2,"v":3,"b":4,"n":4,"m":5,
+        "1":0,"2":1,"3":2,"4":3,"5":3,"6":4,"7":4,"8":5,"9":6,"0":7,"-":7,"=":7," ":8
+    },
+    "QWERTZ": {
+        "q":0,"w":1,"e":2,"r":3,"t":3,"z":4,"u":4,"i":5,"o":6,"p":7,"ü":7,
+        "a":0,"s":1,"d":2,"f":3,"g":3,"h":4,"j":4,"k":5,"l":6,"ö":7,
+        "y":0,"x":1,"c":2,"v":3,"b":4,"n":4,"m":5,
+        "1":0,"2":1,"3":2,"4":3,"5":3,"6":4,"7":4,"8":5,"9":6,"0":7,"ß":7," ":8
+    },
+    "AZERTY": {
+        "a":0,"z":1,"e":2,"r":3,"t":3,"y":4,"u":4,"i":5,"o":6,"p":7,"m":7,
+        "q":0,"s":1,"d":2,"f":3,"g":3,"h":4,"j":4,"k":5,"l":6,";":6,":":6,
+        "w":0,"x":1,"c":2,"v":3,"b":4,"n":4,
+        "1":0,"2":1,"3":2,"4":3,"5":3,"6":4,"7":4,"8":5,"9":6,"0":7," ":8
+    }
+}
+
 COMMON_TYPOS = {
     "the": ["teh"], "and": ["adn"], "that":["taht"], "because": ["becuase", "becaus"],
     "definitely": ["definately"], "separate": ["seperate"], "a lot":["alot"],
     "receive": ["recieve"], "their":["thier", "there"], "you're":["your"]
 }
+
+class ProfileManager:
+    """Per-app profile manager — matches window titles to setting overrides."""
+
+    def __init__(self):
+        self.profiles: dict[str, dict[str, str]] = {}
+        self._original_settings: dict[str, any] | None = None
+
+    def load(self, config: configparser.ConfigParser):
+        self.profiles.clear()
+        for section in config.sections():
+            if section.lower().startswith("profile:"):
+                name = section[8:].strip()
+                self.profiles[name] = dict(config.items(section))
+
+    def match(self, window_title: str | None) -> dict[str, str] | None:
+        if not window_title:
+            return None
+        wt_lower = window_title.lower()
+        for prof in self.profiles.values():
+            pattern = prof.get("windowpattern", "")
+            if pattern and pattern.lower() in wt_lower:
+                return prof
+        return None
+
+    def apply(self, engine: "TypingEngine", profile: dict[str, str]):
+        self._original_settings = engine.settings.copy()
+        for key, val in profile.items():
+            key_lower = key.lower()
+            if key_lower == "windowpattern":
+                continue
+            actual_key = next((k for k in engine.settings if k.lower() == key_lower), key)
+            try:
+                engine.settings[actual_key] = int(val)
+            except ValueError:
+                engine.settings[actual_key] = val
+
+    def restore(self, engine: "TypingEngine"):
+        if self._original_settings is not None:
+            engine.settings.update(self._original_settings)
+            self._original_settings = None
+
 
 class TypingEngine:
     def __init__(self, driver):
@@ -59,6 +123,9 @@ class TypingEngine:
             "EnableSemanticSpeed": 1, "EnableClausePauses": 1,
             "EnableChunkBurst": 1, "EnableSmartRevisions": 1,
             "EnableEntityCare": 1,
+            "EnableFingerPenalty": 1, "EnableFluencyStates": 1,
+            "EnableNumberSymbolCare": 1, "EnableCapsRunRealism": 1,
+            "EnableFrequencyTypos": 1, "EnableDeferredCorrections": 1,
         }
         self.default_hotkeys = {
             "TriggerHotkey": "ctrl+alt+v",
@@ -85,6 +152,19 @@ class TypingEngine:
         self.current_momentum = 0
         self.last_esc_time = 0
         self.countdown = 0
+
+        # Motor-model state machines
+        self._fluent_state = True
+        self._fluency_chars_remaining = 0
+        self._caps_run_active = False
+        self._caps_run_length = 0
+        self._in_number_symbol_run = False
+        self._layout_name = "QWERTY"
+        self._finger_map = FINGER_MAPS["QWERTY"]
+
+        # Per-app profiles
+        self.profile_manager = ProfileManager()
+        self.profile_manager.load(self.config)
 
         self.ui_update_callback = None
         self.status_callback = None
@@ -138,6 +218,12 @@ class TypingEngine:
             'EnableChunkBurst': str(self.settings['EnableChunkBurst']),
             'EnableSmartRevisions': str(self.settings['EnableSmartRevisions']),
             'EnableEntityCare': str(self.settings['EnableEntityCare']),
+            'EnableFingerPenalty': str(self.settings['EnableFingerPenalty']),
+            'EnableFluencyStates': str(self.settings['EnableFluencyStates']),
+            'EnableNumberSymbolCare': str(self.settings['EnableNumberSymbolCare']),
+            'EnableCapsRunRealism': str(self.settings['EnableCapsRunRealism']),
+            'EnableFrequencyTypos': str(self.settings['EnableFrequencyTypos']),
+            'EnableDeferredCorrections': str(self.settings['EnableDeferredCorrections']),
         }
         self.config['Hotkeys'] = {
             'TriggerHotkey': self.hotkeys['TriggerHotkey'],
@@ -206,11 +292,22 @@ class TypingEngine:
         clipboard_text = clipboard_text.replace("\r\n", "\n")
         
         # Attach and lock onto the correct tab using the window title
-        # captured at hotkey-press time (before any focus changes occur)
         self.driver.attach(window_title)
+
+        # Apply per-app profile if matched
+        active_profile = self.profile_manager.match(window_title)
+        if active_profile:
+            self.profile_manager.apply(self, active_profile)
 
         # Lock in running state
         self.set_state(running=True, paused=False)
+
+        # Reset motor-model state machines
+        self._fluent_state = True
+        self._fluency_chars_remaining = 0
+        self._caps_run_active = False
+        self._caps_run_length = 0
+        self._in_number_symbol_run = False
 
         try:
             # COUNTDOWN LOOP
@@ -229,16 +326,14 @@ class TypingEngine:
             self.driver.focus_page()
 
             layout_name = self.driver.detect_layout()
+            self._layout_name = layout_name
+            self._finger_map = FINGER_MAPS.get(layout_name, FINGER_MAPS["QWERTY"])
             neighbor_map = LAYOUTS.get(layout_name, LAYOUTS["QWERTY"])
 
             if self.settings["EnableRichText"]:
-                # Parse clipboard into an ordered action list and execute it.
-                # TypeActions go through the full human-rhythm / typo loop.
-                # KeyActions (formatting shortcuts, Enter, Tab) are pressed directly.
                 actions = self._formatter.parse(clipboard_text)
                 self._execute_actions(actions, neighbor_map)
             else:
-                # Legacy plain-text path (unchanged)
                 self._type_plain_text(clipboard_text, neighbor_map)
 
         except StopTypingException:
@@ -247,6 +342,9 @@ class TypingEngine:
         # Completely sever the Playwright connection when typing finishes
         self.driver.detach()
         self.set_state(running=False, paused=False)
+
+        # Restore original settings if a profile was active
+        self.profile_manager.restore(self)
 
     # ─── Action Dispatcher ───────────────────────────────────────────────────
 
@@ -314,10 +412,17 @@ class TypingEngine:
                 else self.settings["UserVariance"]
             )
 
-            # --- ENTITY CARE: override typo chance ---
+            # --- ENTITY CARE + FREQUENCY TYPO MODULATION ---
             effective_typo_chance = self.settings["TypoChance"]
             if self.settings["EnableEntityCare"] and directive.is_entity:
                 effective_typo_chance = max(0, effective_typo_chance - 2)
+            if self.settings["EnableFrequencyTypos"]:
+                effective_typo_chance = max(0, effective_typo_chance + directive.typo_chance_adjustment)
+
+            # --- FLUENCY STATE ---
+            if self.settings["EnableFluencyStates"]:
+                self._update_fluency_state()
+                effective_variance, effective_typo_chance = self._apply_fluency(effective_variance, effective_typo_chance)
 
             # --- SPEED MODULATION: apply rank-based multiplier ---
             mean = self.settings["UserMeanDelay"]
@@ -336,14 +441,27 @@ class TypingEngine:
                     self.driver.surgical_paste(char)
                     self._sleep(self.settings["UserMeanDelay"] / 1000.0)
                     self.current_momentum = 0
+                    self._in_number_symbol_run = False
                     continue
 
-                # Intra-directive typo logic
+                # --- NUMBER / SYMBOL HANDLING ---
+                if self.settings["EnableNumberSymbolCare"]:
+                    if self._is_digit_or_symbol(char):
+                        if not self._in_number_symbol_run:
+                            self._in_number_symbol_run = True
+                    else:
+                        self._in_number_symbol_run = False
+
+                # Intra-directive typo logic — suppress typos on number/symbol runs
+                local_typo_chance = effective_typo_chance
+                if self.settings["EnableNumberSymbolCare"] and self._in_number_symbol_run:
+                    local_typo_chance = max(0, local_typo_chance - 5)
+
                 if (self.settings["EnableTypos"]
-                        and effective_typo_chance > 0
+                        and local_typo_chance > 0
                         and char_code < 128
                         and char not in [" ", "\n", "\t"]
-                        and random.randint(1, 100) <= effective_typo_chance):
+                        and random.randint(1, 100) <= local_typo_chance):
                     consumed = self._inject_typo(char, directive.text[idx + 1:], neighbor_map)
                     if consumed:
                         continue
@@ -364,6 +482,14 @@ class TypingEngine:
                               "al", "ar", "st", "to", "nt"]:
                     calc_mean -= 10
 
+                # Same-finger bigram penalty / alternating-hand bonus
+                if self.settings["EnableFingerPenalty"]:
+                    calc_mean += self._same_finger_penalty_ms(char, next_char)
+
+                # Number / symbol run delay multiplier
+                if self.settings["EnableNumberSymbolCare"] and self._in_number_symbol_run:
+                    calc_mean = int(calc_mean * 1.35)
+
                 delay = self._gaussian(calc_mean, effective_variance)
                 delay = max(10, min(delay, 250))
                 self._sleep(delay / 1000.0)
@@ -378,6 +504,7 @@ class TypingEngine:
             if stripped and stripped[-1] in [".", "?", "!"]:
                 self._sleep(random.randint(self.settings["SentencePauseMs"], self.settings["SentencePauseMs"] + 400) / 1000.0)
                 self.current_momentum = 0
+                self._in_number_symbol_run = False
             elif stripped and stripped[-1] in [",", ";"]:
                 self._sleep(random.randint(300, 600) / 1000.0)
                 self.current_momentum = max(0, self.current_momentum - 5)
@@ -388,6 +515,7 @@ class TypingEngine:
                     self.driver.send_shift_enter()
                 self._sleep(random.randint(self.settings["ParagraphPauseMs"], self.settings["ParagraphPauseMs"] + 1000) / 1000.0)
                 self.current_momentum = 0
+                self._in_number_symbol_run = False
 
     def _simulate_revision(self, directive, neighbor_map):
         """Type the similar candidate, hesitate, backspace, then type the real text."""
@@ -456,9 +584,27 @@ class TypingEngine:
             self._human_keystroke(c)
             self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
 
-        self._sleep(random.randint(self.settings["TypoDelay"] * 2, self.settings["TypoDelay"] * 4) / 1000.0)
+        # --- DEFERRED vs IMMEDIATE correction strategy ---
+        deferred = False
+        if self.settings["EnableDeferredCorrections"] and random.random() < 0.5:
+            deferred = True
+            # Finish typing the current word before backspacing
+            deferred_chars = ""
+            lookahead = remaining_text[realization:]
+            for lc in lookahead:
+                if lc in [" ", "\n", "\t", ".", ",", ";", ":", "!", "?"]:
+                    break
+                deferred_chars += lc
+                self._human_keystroke(lc)
+                self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
 
-        back_count = len(typo_chars) + len(buf)
+            # Now backspace the whole mess
+            self._sleep(random.randint(self.settings["TypoDelay"] * 2, self.settings["TypoDelay"] * 4) / 1000.0)
+            back_count = len(typo_chars) + len(buf) + len(deferred_chars)
+        else:
+            self._sleep(random.randint(self.settings["TypoDelay"] * 2, self.settings["TypoDelay"] * 4) / 1000.0)
+            back_count = len(typo_chars) + len(buf)
+
         for _ in range(back_count):
             self.driver.send_backspace()
             self._sleep(random.randint(30, 60) / 1000.0)
@@ -576,6 +722,7 @@ class TypingEngine:
                     self._sleep(self.settings["UserMeanDelay"] / 1000.0)
                     self.current_momentum = 0
                     current_word_buffer = ""
+                    self._in_number_symbol_run = False
                     i += 1
                     continue
 
@@ -592,6 +739,7 @@ class TypingEngine:
                     self._human_keystroke(char)
                     self._sleep(random.randint(self.settings["SentencePauseMs"], self.settings["SentencePauseMs"] + 400) / 1000.0)
                     self.current_momentum = 0
+                    self._in_number_symbol_run = False
                     words_typed_in_sentence = 0
                     i += 1
                     continue
@@ -600,6 +748,7 @@ class TypingEngine:
                     self._human_keystroke(char)
                     self._sleep(random.randint(300, 600) / 1000.0)
                     self.current_momentum = max(0, self.current_momentum - 5)
+                    self._in_number_symbol_run = False
                     i += 1
                     continue
 
@@ -614,6 +763,7 @@ class TypingEngine:
                         self.driver.send_shift_enter()
                     self._sleep(random.randint(self.settings["ParagraphPauseMs"], self.settings["ParagraphPauseMs"] + 1000) / 1000.0)
                     self.current_momentum = 0
+                    self._in_number_symbol_run = False
                     words_typed_in_sentence = 0
                 elif char == "\t":
                     self.driver.send_tab()
@@ -628,7 +778,28 @@ class TypingEngine:
                 if bigram in["th", "he", "in", "er", "an", "re", "on", "at", "en", "nd", "ti", "es", "or", "te", "of", "ed", "is", "it", "al", "ar", "st", "to", "nt"]:
                     calc_mean -= 10
 
-                final_delay = self._gaussian(calc_mean, self.settings["UserVariance"])
+                # Same-finger bigram penalty
+                if self.settings["EnableFingerPenalty"]:
+                    calc_mean += self._same_finger_penalty_ms(char, next_char)
+
+                # Number / symbol run handling
+                if self.settings["EnableNumberSymbolCare"]:
+                    if self._is_digit_or_symbol(char):
+                        if not self._in_number_symbol_run:
+                            self._in_number_symbol_run = True
+                    else:
+                        self._in_number_symbol_run = False
+                    if self._in_number_symbol_run:
+                        calc_mean = int(calc_mean * 1.35)
+
+                # Fluency state
+                effective_variance = self.settings["UserVariance"]
+                if self.settings["EnableFluencyStates"]:
+                    self._update_fluency_state()
+                    if not self._fluent_state:
+                        effective_variance = int(effective_variance * 1.7)
+
+                final_delay = self._gaussian(calc_mean, effective_variance)
                 final_delay = max(10, min(final_delay, 250))
                 self._sleep(final_delay / 1000.0)
 
@@ -645,10 +816,73 @@ class TypingEngine:
                 self.set_state(paused=True)
             self.last_esc_time = current_time
 
+    # ─── Motor-Model Helpers ────────────────────────────────────────────────
+
+    def _same_finger_penalty_ms(self, char, next_char):
+        """Return a delay adjustment for same-finger / alternating-hand bigrams.
+
+        Same finger → +25 ms penalty. Alternating hands → −5 ms bonus.
+        Thumb (space) or missing chars → 0.
+        """
+        c1 = char.lower()
+        c2 = next_char.lower() if next_char else ""
+        if not c1 or not c2 or c1 == c2 == " ":
+            return 0
+        f1 = self._finger_map.get(c1, -1)
+        f2 = self._finger_map.get(c2, -1)
+        if f1 == -1 or f2 == -1:
+            return 0
+        if f1 == f2 and f1 < 8:
+            return 25   # same finger penalty
+        # Determine hand: left (0-3) vs right (4-7)
+        left_hand = f1 <= 3
+        right_hand = f2 <= 3
+        if left_hand != right_hand and f1 < 8 and f2 < 8:
+            return -5   # alternating hands bonus
+        return 0
+
+    def _update_fluency_state(self):
+        """Update the 2-state Markov chain for fluent/disfluent typing."""
+        if self._fluency_chars_remaining > 0:
+            self._fluency_chars_remaining -= 1
+            if self._fluency_chars_remaining == 0:
+                self._fluent_state = True
+            return
+        if self._fluent_state:
+            if random.random() < 0.015:  # 1.5 % chance to enter disfluent state
+                self._fluent_state = False
+                self._fluency_chars_remaining = random.randint(8, 35)
+        else:
+            if random.random() < 0.08:   # 8 % chance per char to recover
+                self._fluent_state = True
+
+    def _apply_fluency(self, variance, typo_chance):
+        """Apply fluency state to variance and typo chance."""
+        if not self._fluent_state:
+            return (int(variance * 1.7), typo_chance + 4)
+        return (variance, typo_chance)
+
+    @staticmethod
+    def _is_digit_or_symbol(char):
+        """True for digits and common symbols that humans type deliberately."""
+        return char in "0123456789!@#$%^&*()_+-=[]{}|;':\",./<>?\\`~"
+
     def _human_keystroke(self, char):
         dwell_time = random.randint(10, 40)
-        if char.isupper() and char != " " and random.randint(1, 10) > 7:
-            dwell_time += random.randint(20, 50)
+        if char.isupper() and char != " ":
+            if self.settings["EnableCapsRunRealism"]:
+                # Consecutive capitals: penalty on first cap in run only
+                if not self._caps_run_active:
+                    dwell_time += random.randint(30, 70)
+                    self._caps_run_active = True
+                self._caps_run_length += 1
+            else:
+                # Legacy: random per-capital penalty
+                if random.randint(1, 10) > 7:
+                    dwell_time += random.randint(20, 50)
+        else:
+            self._caps_run_active = False
+            self._caps_run_length = 0
         self.driver.send_char(char, dwell_time / 1000.0)
 
     def _get_neighbor(self, char, map_to_use):

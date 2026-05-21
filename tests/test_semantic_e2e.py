@@ -56,6 +56,12 @@ def engine():
     eng.settings["EnableSmartRevisions"] = 1
     eng.settings["EnableEntityCare"] = 1
     eng.settings["TypoChance"] = 0
+    eng.settings["EnableFingerPenalty"] = 1
+    eng.settings["EnableFluencyStates"] = 1
+    eng.settings["EnableNumberSymbolCare"] = 1
+    eng.settings["EnableCapsRunRealism"] = 1
+    eng.settings["EnableFrequencyTypos"] = 1
+    eng.settings["EnableDeferredCorrections"] = 1
     return eng
 
 

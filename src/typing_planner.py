@@ -20,6 +20,7 @@ class TypingDirective:
     delay_multiplier: float = 1.0 # Applied on top of base
     momentum_boost: bool = True     # Whether momentum reduces delay for this directive
     typo_chance: int = 0          # Override typo chance (0 = use global)
+    typo_chance_adjustment: int = 0  # Rank-based adjustment (negative = fewer typos)
     revision_candidate: Optional[str] = None  # Similar word to type-then-replace
     pause_after_ms: int = 0       # Extra pause after this directive finishes
     is_entity: bool = False
@@ -67,6 +68,7 @@ class TypingPlanner:
                     delay_multiplier=self._rank_multiplier(max_rank),
                     momentum_boost=True,
                     typo_chance=0,
+                    typo_chance_adjustment=self._typo_adjustment(max_rank),
                     revision_candidate=None,
                     pause_after_ms=self._clause_pause_ms(any_clause),
                     is_entity=is_ent,
@@ -85,6 +87,7 @@ class TypingPlanner:
                 delay_multiplier=self._rank_multiplier(meta.rank),
                 momentum_boost=not meta.is_entity,
                 typo_chance=self._entity_typo_override(meta.is_entity),
+                typo_chance_adjustment=self._typo_adjustment(meta.rank),
                 revision_candidate=rev_cand,
                 pause_after_ms=self._clause_pause_ms(meta.clause_boundary),
                 is_entity=meta.is_entity,
@@ -123,6 +126,16 @@ class TypingPlanner:
         0 means 'use the global TypoChance setting'.
         """
         return -1 if is_entity else 0   # -1 signals 'suppress typos entirely'
+
+    @staticmethod
+    def _typo_adjustment(rank: int) -> int:
+        """Map spaCy token rank to a typo-chance adjustment.
+
+        Very common words (low rank) get a negative adjustment → fewer typos.
+        Rare words (high rank) get 0 → no change.
+        """
+        familiarity = max(0.0, min(1.0, 1.0 - (rank / 15000)))
+        return -int(familiarity * 3)
 
     def _pick_revision(self, meta: TokenMeta) -> Optional[str]:
         """Stochastically choose a similar word to type-then-replace."""

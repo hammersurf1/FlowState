@@ -184,6 +184,10 @@ class SettingsWindow:
         notebook.add(tab_hotkeys, text="  Hotkeys  ")
         self._build_hotkeys_tab(tab_hotkeys)
 
+        tab_profiles = ttk.Frame(notebook, padding=16)
+        notebook.add(tab_profiles, text="  Profiles  ")
+        self._build_profiles_tab(tab_profiles)
+
         # --- Footer Buttons ---
         btn_frame = ttk.Frame(self.root, padding=(12, 10))
         btn_frame.pack(side="bottom", fill="x")
@@ -289,6 +293,163 @@ class SettingsWindow:
             parent, "EnableChunkBurst",
             "Chunk burst — type noun phrases as single cognitive bursts"
         )
+        self._add_checkbox(
+            parent, "EnableFrequencyTypos",
+            "Frequency-based typos — common words have fewer typos"
+        )
+        self._add_checkbox(
+            parent, "EnableDeferredCorrections",
+            "Deferred corrections — finish word before backspacing a typo"
+        )
+
+        self._add_section(parent, "Motor Realism")
+        self._add_checkbox(
+            parent, "EnableFingerPenalty",
+            "Same-finger penalty — slower when same finger types two chars"
+        )
+        self._add_checkbox(
+            parent, "EnableFluencyStates",
+            "Fluency states — alternate between fluent and disfluent periods"
+        )
+        self._add_checkbox(
+            parent, "EnableNumberSymbolCare",
+            "Number / symbol care — slower, fewer typos on digits and symbols"
+        )
+        self._add_checkbox(
+            parent, "EnableCapsRunRealism",
+            "Caps Lock realism — delay on first capital only in a run"
+        )
+
+    def _build_profiles_tab(self, parent):
+        """Build the per-app profiles configuration tab."""
+        self._add_section(parent, "App Profiles")
+
+        desc = ttk.Label(parent, text=(
+            "Profiles override typing settings for specific applications.\n"
+            "Match by substring in the active window title (case-insensitive)."
+        ), style="Desc.TLabel", wraplength=440, justify="left")
+        desc.pack(anchor="w", pady=(0, 12))
+
+        # Listbox of existing profiles
+        list_frame = ttk.Frame(parent)
+        list_frame.pack(fill="x", pady=6)
+
+        self._profile_listbox = tk.Listbox(list_frame, height=4)
+        self._profile_listbox.pack(side="left", fill="x", expand=True)
+        self._profile_listbox.bind("<<ListboxSelect>>", self._on_profile_select)
+
+        btn_frame = ttk.Frame(list_frame)
+        btn_frame.pack(side="right")
+
+        ttk.Button(btn_frame, text="Add", command=self._add_profile, width=7).pack(pady=2)
+        ttk.Button(btn_frame, text="Delete", command=self._delete_profile, width=7).pack(pady=2)
+
+        # Profile editor fields
+        self._prof_vars = {}
+        self._prof_pattern_var = tk.StringVar()
+
+        ttk.Label(parent, text="Window Pattern (substring):").pack(anchor="w", pady=(12, 2))
+        ttk.Entry(parent, textvariable=self._prof_pattern_var, width=50).pack(fill="x")
+
+        prof_fields = [
+            ("UserMeanDelay", "Typing Speed"),
+            ("UserVariance", "Variance"),
+            ("TypoChance", "Typo Chance (%)"),
+            ("TypoDelay", "Correction Speed (ms)"),
+            ("RevisionChance", "Revision Chance (%)"),
+        ]
+        for key, label in prof_fields:
+            f = ttk.Frame(parent)
+            f.pack(fill="x", pady=2)
+            ttk.Label(f, text=label, width=22).pack(side="left")
+            self._prof_vars[key] = tk.IntVar(value=self.engine.settings.get(key, 0))
+            s = ttk.Scale(f, from_={"UserMeanDelay": (5, 200), "UserVariance": (0, 150),
+                                     "TypoChance": (0, 30), "TypoDelay": (50, 500),
+                                     "RevisionChance": (0, 30)}[key][0],
+                          to={"UserMeanDelay": (5, 200), "UserVariance": (0, 150),
+                              "TypoChance": (0, 30), "TypoDelay": (50, 500),
+                              "RevisionChance": (0, 30)}[key][1],
+                          variable=self._prof_vars[key])
+            s.pack(side="left", fill="x", expand=True)
+
+        ttk.Button(parent, text="Save Profile", command=self._save_profile).pack(pady=12)
+
+        # Populate listbox
+        self._refresh_profile_listbox()
+
+    def _refresh_profile_listbox(self):
+        """Populate the profile listbox from engine's profile manager."""
+        self._profile_listbox.delete(0, tk.END)
+        for name in self.engine.profile_manager.profiles:
+            self._profile_listbox.insert(tk.END, name)
+
+    def _on_profile_select(self, _event=None):
+        """Load selected profile values into the editor."""
+        sel = self._profile_listbox.curselection()
+        if not sel:
+            return
+        name = self._profile_listbox.get(sel[0])
+        prof = self.engine.profile_manager.profiles.get(name, {})
+        self._prof_pattern_var.set(prof.get("windowpattern", ""))
+        for key, var in self._prof_vars.items():
+            var.set(int(prof.get(key, self.engine.defaults.get(key, 0))))
+
+    def _add_profile(self):
+        """Add a blank profile entry."""
+        from tkinter import simpledialog
+        name = simpledialog.askstring("Profile Name", "Enter a name for this profile:",
+                                      parent=self.root)
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            return
+        # Ensure section header format
+        self._refresh_profile_listbox()
+        self._prof_pattern_var.set("")
+        for key, var in self._prof_vars.items():
+            var.set(self.engine.settings.get(key, 0))
+
+    def _delete_profile(self):
+        """Remove the selected profile."""
+        sel = self._profile_listbox.curselection()
+        if not sel:
+            return
+        name = self._profile_listbox.get(sel[0])
+        self.engine.profile_manager.profiles.pop(name, None)
+        # Also remove from config
+        section = f"Profile:{name}"
+        self.engine.config.remove_section(section)
+        self._refresh_profile_listbox()
+
+    def _save_profile(self):
+        """Save the current profile editor values."""
+        sel = self._profile_listbox.curselection()
+        name = sel[0] if sel else None
+        if name is None:
+            from tkinter import simpledialog
+            name = simpledialog.askstring("Profile Name", "Enter profile name:",
+                                          parent=self.root)
+            if not name:
+                return
+            name = name.strip()
+            if not name:
+                return
+        else:
+            name = self._profile_listbox.get(name)
+
+        profile = {"windowpattern": self._prof_pattern_var.get().strip()}
+        for key, var in self._prof_vars.items():
+            profile[key] = str(var.get())
+
+        self.engine.profile_manager.profiles[name] = profile
+        section = f"Profile:{name}"
+        if not self.engine.config.has_section(section):
+            self.engine.config.add_section(section)
+        for k, v in profile.items():
+            self.engine.config.set(section, k, v)
+
+        self._refresh_profile_listbox()
 
     def _build_hotkeys_tab(self, parent):
         self._add_section(parent, "Hotkey Configuration")
@@ -388,6 +549,22 @@ class SettingsWindow:
             self.engine.hotkeys[key] = new_val
 
         self.engine.save_settings()
+
+        # Persist profiles to the config file
+        for name, prof in self.engine.profile_manager.profiles.items():
+            section = f"Profile:{name}"
+            if not self.engine.config.has_section(section):
+                self.engine.config.add_section(section)
+            for k, v in prof.items():
+                self.engine.config.set(section, k, v)
+        # Remove stale profile sections
+        for section in self.engine.config.sections():
+            if section.startswith("Profile:"):
+                prof_name = section[8:]
+                if prof_name not in self.engine.profile_manager.profiles:
+                    self.engine.config.remove_section(section)
+        with open(self.engine.ini_file, "w") as cf:
+            self.engine.config.write(cf)
 
         if self.engine.ui_update_callback:
             self.engine.ui_update_callback()

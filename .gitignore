@@ -17,6 +17,9 @@ settings.ini
 # AI context files (not part of the project)
 GEMINI.md
 
+# Hermes plans
+.hermes/
+
 # OS junk
 .DS_Store
 Thumbs.db
