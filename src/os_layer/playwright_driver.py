@@ -154,9 +154,9 @@ class PlaywrightDriver:
             self.page.keyboard.insert_text(content)
 
     def send_char(self, char, dwell_time_seconds):
+        """Atomic text insertion — never drops characters, even at high speed."""
         if self.page:
-            delay_ms = dwell_time_seconds * 1000
-            self.page.keyboard.type(char, delay=delay_ms)
+            self.page.keyboard.insert_text(char)
 
     def send_backspace(self):
         if self.page:
