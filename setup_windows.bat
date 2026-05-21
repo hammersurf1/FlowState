@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM  FlowState — Windows Manual Setup
+REM  FlowState - Windows Manual Setup
 REM  This script sets up a local Python environment and installs
 REM  all dependencies needed to run FlowState on Windows.
 REM
@@ -19,7 +19,7 @@ REM ============================================================
 
 echo.
 echo  =============================================
-echo   FlowState — Windows Setup
+echo   FlowState - Windows Setup
 echo  =============================================
 echo.
 
