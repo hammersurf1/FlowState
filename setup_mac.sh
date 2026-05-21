@@ -49,10 +49,16 @@ echo "  OK"
 echo ""
 
 # ── Step 3: Install Dependencies ─────────────────────────────
-echo "[Step 3/3] Installing dependencies from requirements_mac.txt..."
+echo [Step 3/4] Installing dependencies from requirements_mac.txt...
 source .venv/bin/activate
 pip install -r requirements_mac.txt
-echo "  OK"
+echo  OK
+echo ""
+
+# ── Step 4: Download spaCy Model ─────────────────────────────
+echo "[Step 4/4] Downloading spaCy language model (en_core_web_md)..."
+python3 -m spacy download en_core_web_md
+echo  OK
 echo ""
 
 # ── Done ─────────────────────────────────────────────────────

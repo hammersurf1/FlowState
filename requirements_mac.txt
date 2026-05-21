@@ -3,3 +3,4 @@ Pillow==12.2.0
 pynput==1.8.1
 pyperclip==1.11.0
 playwright==1.59.0
+spacy==3.7.4

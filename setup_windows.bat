@@ -8,7 +8,8 @@ REM  WHAT THIS SCRIPT DOES (nothing hidden):
 REM    1. Checks that Python 3 is installed
 REM    2. Creates a virtual environment in .venv\
 REM    3. Installs Python packages from requirements_win.txt
-REM    4. Prints instructions for how to run FlowState
+REM    4. Downloads the spaCy language model
+REM    5. Prints instructions for how to run FlowState
 REM
 REM  WHAT THIS SCRIPT DOES NOT DO:
 REM    - It does NOT install anything system-wide
@@ -54,12 +55,24 @@ echo   OK
 echo.
 
 REM ── Step 3: Install Dependencies ─────────────────────────────
-echo [Step 3/3] Installing dependencies from requirements_win.txt...
+echo [Step 3/4] Installing dependencies from requirements_win.txt...
 call .venv\Scripts\activate.bat
 pip install -r requirements_win.txt
 if %errorlevel% neq 0 (
     echo.
     echo  ERROR: pip install failed. Check the output above for details.
+    pause
+    exit /b 1
+)
+echo   OK
+echo.
+
+REM ── Step 4: Download spaCy Model ─────────────────────────────
+echo [Step 4/4] Downloading spaCy language model (en_core_web_md)...
+python -m spacy download en_core_web_md
+if %errorlevel% neq 0 (
+    echo.
+    echo  ERROR: spaCy model download failed.
     pause
     exit /b 1
 )
