@@ -32,45 +32,26 @@ if %errorlevel% equ 0 (
 REM --- Step 0: Enforce Python 3.12 ----------------------------
 echo [Step 0/5] Ensuring Python %PY_VER% is available...
 set PYTHON_CMD=
-set UV_PYTHON_EXE=
 
-if %USE_UV% equ 1 (
-    REM uv can manage its own Python. Check if 3.12 is already installed.
-    for /f "usebackq tokens=*" %%a in (`uv python find %PY_VER% 2^>nul`) do set "UV_PYTHON_EXE=%%a"
-    if not "%UV_PYTHON_EXE%"=="" (
-        echo   uv-managed Python %PY_VER% found.
-        set "PYTHON_CMD=%UV_PYTHON_EXE%"
-        goto :python_ok
-    )
-    echo   Installing Python %PY_VER% via uv (this may take a moment)...
-    uv python install %PY_VER%
-    if %errorlevel% neq 0 (
-        echo   ERROR: uv failed to install Python %PY_VER%.
-        pause
-        exit /b 1
-    )
-    for /f "usebackq tokens=*" %%a in (`uv python find %PY_VER%`) do set "UV_PYTHON_EXE=%%a"
-    set "PYTHON_CMD=%UV_PYTHON_EXE%"
-    goto :python_ok
+if %USE_UV% equ 1 goto :uv_find_python
+goto :no_uv_find_python
+
+REM --- uv path --------------------------------------------------
+:uv_find_python
+call :uv_ensure_python
+if %errorlevel% neq 0 (
+    echo   ERROR: uv failed to provide Python %PY_VER%.
+    pause
+    exit /b 1
 )
+goto :python_ok
 
-REM --- Non-uv path: check py launcher versions ----------------
-REM Try py -3.12 first (most reliable after a fresh install)
-py -%PY_VER% --version >"%VER_FILE%" 2>&1
-if %errorlevel% equ 0 (
-    set "PYTHON_CMD=py -%PY_VER%"
-    goto :python_ok
-)
-
-REM Try generic python commands and parse version
-call :check_python_version py
-if not "%PYTHON_CMD%"=="" goto :python_ok
-call :check_python_version python
-if not "%PYTHON_CMD%"=="" goto :python_ok
-call :check_python_version python3
+REM --- non-uv path --------------------------------------------
+:no_uv_find_python
+call :find_system_python
 if not "%PYTHON_CMD%"=="" goto :python_ok
 
-REM Nothing suitable found - download and install 3.12 ----------
+REM No suitable Python found - download and install 3.12 --------
 echo.
 echo   No suitable Python found. Downloading Python %PY_VER%...
 echo   URL: %PY_URL%
@@ -92,10 +73,9 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-REM Clean up installer
 del "%PY_INSTALLER%" >nul 2>&1
 
-REM Re-check py launcher after install
+REM Re-check py launcher after install ---------------------------
 timeout /t 2 /nobreak >nul 2>&1
 py -%PY_VER% --version >nul 2>&1
 if %errorlevel% equ 0 (
@@ -108,6 +88,37 @@ echo   ERROR: Python was installed but cannot be found.
 pause
 exit /b 1
 
+REM --- uv: ensure Python is available ----------------------------
+:uv_ensure_python
+uv python find %PY_VER% >nul 2>nul
+if %errorlevel% equ 0 (
+    echo   uv-managed Python %PY_VER% found.
+    set "PYTHON_CMD=uv run --python %PY_VER% python"
+    exit /b 0
+)
+echo   Installing Python %PY_VER% via uv (this may take a moment)...
+uv python install %PY_VER%
+if %errorlevel% neq 0 exit /b 1
+set "PYTHON_CMD=uv run --python %PY_VER% python"
+exit /b 0
+
+REM --- non-uv: find system python ------------------------------
+:find_system_python
+REM Try py launcher with version flag first
+py -%PY_VER% --version >"%VER_FILE%" 2>&1
+if %errorlevel% equ 0 (
+    set "PYTHON_CMD=py -%PY_VER%"
+    exit /b 0
+)
+
+REM Try python3, python, py and check versions
+call :check_python_version python3
+if not "%PYTHON_CMD%"=="" exit /b 0
+call :check_python_version python
+if not "%PYTHON_CMD%"=="" exit /b 0
+call :check_python_version py
+exit /b 0
+
 :python_ok
 echo   OK  ^(%PYTHON_CMD%^)
 echo.
@@ -118,7 +129,6 @@ echo [Step 1/5] Verifying Python version...
 set /p RAW_PY_VERSION=<"%VER_FILE%"
 echo   %RAW_PY_VERSION%
 
-REM Extract major.minor from version string "Python 3.12.x"
 for /f "tokens=2 delims= " %%a in ("%RAW_PY_VERSION%") do set "DETECTED_VER=%%a"
 for /f "tokens=1,2 delims=." %%a in ("%DETECTED_VER%") do (
     set "DETECTED_MAJOR=%%a"
@@ -233,7 +243,7 @@ exit /b 0
 
 REM ============================================================
 REM  Helper: check_python_version
-REM  Checks a command (py, python, python3) and sets PYTHON_CMD
+REM  Checks a command (python3, python, py) and sets PYTHON_CMD
 REM  if the version is between 3.11 and 3.12 inclusive.
 REM ============================================================
 :check_python_version
