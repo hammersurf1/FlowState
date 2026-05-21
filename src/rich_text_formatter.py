@@ -2,20 +2,23 @@
 FlowState — Rich Text Formatter
 Parses Markdown-flavoured clipboard text into a sequence of TypeActions and
 KeyActions that the TypingEngine executes to produce bold, italic, underline,
-bullet lists, numbered lists, and nested sub-items in the target browser app.
+strikethrough, bullet lists, numbered lists, nested sub-items, and headings
+in the target browser app.
 
 Supported syntax:
   **text** or __text__        → Bold       (Ctrl/Cmd+B)
   *text*   or _text_          → Italic     (Ctrl/Cmd+I)
   ___text___                  → Underline  (Ctrl/Cmd+U)  [triple underscore]
+  ~~text~~                    → Strikethrough (Alt+Shift+5) [Google Docs]
   - item  / * item            → Unordered bullet
   1. item                     → Ordered list item
+  # / ## / ### ...            → Heading 1–6 (Ctrl/Cmd+Alt+1–6)
   Leading \\t or 2/4 spaces   → Sub-level indent (Tab after Enter)
   \\n                         → Enter (always hard Enter for list items)
 
 Design notes:
 - Parse line-by-line to detect list context, then inline-parse each line for
-  bold/italic/underline spans.
+  bold/italic/underline/strikethrough spans.
 - Formatting shortcuts are toggled before and after each span (open/close).
 - The formatter is stateless; it returns an immutable list of actions per call.
 - Platform ('win' or 'mac') determines the modifier key (Ctrl vs Cmd).
@@ -88,6 +91,20 @@ class RichTextFormatter:
             # Peek at the next non-empty line to decide list continuation
             next_line = lines[line_idx + 1] if line_idx + 1 < len(lines) else ""
 
+            # ── Block-level: Header ──────────────────────────────────────
+            header_match = re.match(r'^(#{1,6})\s+(.*)', raw_line)
+            if header_match:
+                level = len(header_match.group(1))
+                content = header_match.group(2)
+                if not is_first_line:
+                    actions.append(KeyAction("\n"))
+                # Activate heading style (Ctrl/Cmd+Alt+1..6)
+                actions.append(KeyAction(f"{self._mod}+Alt+{level}"))
+                actions.extend(self._parse_inline(content))
+                list_state = None  # headers break any ongoing list
+                is_first_line = False
+                continue
+
             ul_match = self._unordered_re.match(raw_line)
             ol_match = self._ordered_re.match(raw_line)
 
@@ -122,14 +139,16 @@ class RichTextFormatter:
 
             else:
                 # ── Plain / paragraph line ───────────────────────────────────
-                # If we were in a list and now we're not, deactivate list mode
-                # (the user presses Enter twice to exit a list in most apps).
-                if list_state is not None and raw_line.strip():
+                if list_state is not None:
+                    # Exit list mode. In most rich-text editors, pressing Enter on
+                    # the last list item creates an empty bullet; pressing Enter
+                    # again exits the list and creates a new paragraph.
+                    actions.append(KeyAction("Enter"))
                     actions.append(KeyAction("Enter"))
                     list_state = None
 
-                if not is_first_line:
-                    # Emit the newline between lines
+                if not is_first_line and raw_line.strip():
+                    # Emit the newline between non-empty lines
                     actions.append(KeyAction("\n"))   # engine maps \n → Enter/Shift+Enter
 
                 # Type the line content with inline formatting
@@ -152,25 +171,29 @@ class RichTextFormatter:
 
     def _parse_inline(self, text: str) -> List[Action]:
         """
-        Parse inline Markdown (bold, italic, underline) within a single line
-        of text and return a sequence of TypeActions / KeyActions.
+        Parse inline Markdown (bold, italic, underline, strikethrough) within a
+        single line of text and return a sequence of TypeActions / KeyActions.
 
         Precedence (parsed in order, highest first):
           1. ___text___   → underline  (triple underscore, checked before double)
-          2. **text**     → bold
-          3. __text__     → bold  (double underscore)
-          4. *text*       → italic
-          5. _text_       → italic (single underscore, checked last)
+          2. ~~text~~     → strikethrough (Alt+Shift+5 — Google Docs specific)
+          3. **text**     → bold
+          4. __text__     → bold  (double underscore)
+          5. *text*       → italic
+          6. _text_       → italic (single underscore, checked last)
         """
         actions: List[Action] = []
         # Build a single regex that matches all inline markers.
         # Named groups let us identify which marker was matched.
+        # Italic markers use lookarounds so they don't match * or _ that
+        # are part of **bold** or __bold__ pairs.
         pattern = re.compile(
             r'(?P<underline>___(?P<u_text>.+?)___)'
+            r'|(?P<strikethrough>~~(?P<s_text>.+?)~~)'
             r'|(?P<bold_star>\*\*(?P<bs_text>.+?)\*\*)'
             r'|(?P<bold_us>__(?P<bu_text>.+?)__)'
-            r'|(?P<italic_star>\*(?P<is_text>.+?)\*)'
-            r'|(?P<italic_us>_(?P<iu_text>.+?)_)',
+            r'|(?P<italic_star>(?<![*])\*(?!\*)(?P<is_text>.+?)(?<![*])\*(?!\*))'
+            r'|(?P<italic_us>(?<!_)_(?!_)(?P<iu_text>.+?)(?<!_)_(?!_))',
             re.DOTALL
         )
 
@@ -187,6 +210,12 @@ class RichTextFormatter:
                 actions.append(KeyAction(f"{self._mod}+u"))
                 actions.extend(self._parse_inline(inner))
                 actions.append(KeyAction(f"{self._mod}+u"))
+
+            elif m.group("strikethrough"):
+                inner = m.group("s_text")
+                actions.append(KeyAction("Alt+Shift+5"))
+                actions.extend(self._parse_inline(inner))
+                actions.append(KeyAction("Alt+Shift+5"))
 
             elif m.group("bold_star") or m.group("bold_us"):
                 inner = m.group("bs_text") or m.group("bu_text")

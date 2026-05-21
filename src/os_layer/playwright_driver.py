@@ -166,6 +166,15 @@ class PlaywrightDriver:
         if self.page:
             self.page.keyboard.press("Shift+Enter", delay=10)
 
+    def send_enter(self):
+        if self.page:
+            self.page.keyboard.press("Enter", delay=10)
+
     def send_tab(self):
         if self.page:
             self.page.keyboard.press("Tab", delay=10)
+
+    def send_key(self, shortcut):
+        """Send an arbitrary keyboard shortcut via Playwright (e.g. 'Control+b')."""
+        if self.page:
+            self.page.keyboard.press(shortcut, delay=10)

@@ -161,6 +161,43 @@ If you prefer to run from source, or you want to inspect exactly what FlowState 
 | Cycle through settings | `Ctrl+Shift+Alt+↑/↓` | `⌘+⇧+⌥+↑/↓` |
 | Adjust selected setting | `Ctrl+Shift+Alt+→/←` | `⌘+⇧+⌥+→/←` |
 
+### Rich Text Formatting
+
+FlowState can type with **rich formatting** (bold, italic, lists, headings, etc.) when **Enable Rich Text** is turned on in Settings. Use Markdown syntax in your clipboard text:
+
+| Syntax | Result | Shortcut sent |
+|---|---|---|
+| `**text**` or `__text__` | **Bold** | Ctrl/Cmd+B |
+| `*text*` or `_text_` | *Italic* | Ctrl/Cmd+I |
+| `___text___` | <u>Underline</u> | Ctrl/Cmd+U |
+| `~~text~~` | ~~Strikethrough~~ | Alt+Shift+5 (Google Docs) |
+| `# Heading` | Heading 1 | Ctrl/Cmd+Alt+1 |
+| `## Heading` | Heading 2 | Ctrl/Cmd+Alt+2 |
+| `### Heading` | Heading 3 | Ctrl/Cmd+Alt+3 |
+| `- item` or `* item` | • Bullet list | Ctrl/Cmd+Shift+8 |
+| `1. item` | 1. Numbered list | Ctrl/Cmd+Shift+7 |
+| `  - item` (2 spaces) | → Sub-bullet | Tab indent |
+| `\t- item` (tab) | → Sub-bullet | Tab indent |
+
+**Example clipboard text:**
+```markdown
+# Meeting Notes
+
+**Attendees:** Alice, Bob
+
+## Agenda
+- Intro
+  - Welcome
+- ~~Old item~~ (cancelled)
+1. Action items
+  1. Send report
+```
+
+**Notes:**
+- Strikethrough (`~~`) works best in **Google Docs** (uses the Docs-specific Alt+Shift+5 shortcut).
+- Sub-bullets and sub-numbers are created by indenting with **2 spaces** or a **tab**.
+- The target editor must support the standard Ctrl/Cmd shortcuts for formatting.
+
 ### System tray HUD
 
 The icon gives a live status readout. It shows the active setting's short name and current value.

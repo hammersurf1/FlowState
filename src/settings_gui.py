@@ -263,6 +263,10 @@ class SettingsWindow:
             parent, "UseEnterOnly",
             "Use plain Enter instead of Shift+Enter for new lines"
         )
+        self._add_checkbox(
+            parent, "EnableRichText",
+            "Enable rich-text formatting (bold, italic, lists, headings, etc.)"
+        )
 
     def _build_hotkeys_tab(self, parent):
         self._add_section(parent, "Hotkey Configuration")
