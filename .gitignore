@@ -7,7 +7,6 @@ __pycache__/
 build/
 dist/
 build_scripts/dist/
-*.spec
 
 # Virtual environments
 .venv/

@@ -15,7 +15,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Read Version
         id: version
@@ -35,11 +35,25 @@ jobs:
           pip install -r requirements_win.txt
           pip install pyinstaller
 
+      - name: Download spaCy Model
+        run: python -m spacy download en_core_web_md
+
       - name: Build (onedir)
         run: pyinstaller FlowState.spec --clean --noconfirm
 
-      - name: Create Installer (Inno Setup)
-        run: iscc build_scripts\windows_setup.iss
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress
+
+      - name: Update Installer Version
+        shell: powershell
+        run: |
+          $iss = Get-Content build_scripts\windows_setup.iss
+          $iss = $iss -replace '#define MyAppVersion ".*"', '#define MyAppVersion "${{ steps.version.outputs.version }}"'
+          Set-Content build_scripts\windows_setup.iss $iss
+
+      - name: Create Installer
+        run: |
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' build_scripts\windows_setup.iss
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -56,7 +70,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Read Version
         id: version
@@ -75,6 +89,9 @@ jobs:
         run: |
           pip install -r requirements_mac.txt
           pip install pyinstaller
+
+      - name: Download spaCy Model
+        run: python -m spacy download en_core_web_md
 
       - name: Build .app
         run: pyinstaller FlowState_mac.spec --clean --noconfirm

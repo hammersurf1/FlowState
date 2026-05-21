@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# FlowState Windows Build Spec (onedir mode)
+# FlowState macOS Build Spec (app bundle)
 from PyInstaller.utils.hooks import collect_all
 import os
 
@@ -31,7 +31,7 @@ for pkg in ('spacy', 'thinc', 'blis', 'en_core_web_md'):
         pass
 
 a = Analysis(
-    ['src\\main_win.py'],
+    ['src/main_mac.py'],
     pathex=['src'],
     binaries=binaries,
     datas=datas,
@@ -61,8 +61,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    uac_admin=True,
-    icon=['assets\\icon.ico'],
+    icon=['assets/logo.icns'],
 )
 
 coll = COLLECT(
@@ -73,4 +72,11 @@ coll = COLLECT(
     upx=True,
     upx_exclude=[],
     name='FlowState',
+)
+
+app = BUNDLE(
+    coll,
+    name='FlowState.app',
+    icon='assets/logo.icns',
+    bundle_identifier='com.hammersurf.flowstate',
 )

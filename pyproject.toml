@@ -3,7 +3,7 @@ name = "flowstate"
 version = "1.0.0"
 description = "A realistic typing simulator that pastes clipboard content with human-like imperfections"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "configparser>=7.2.0",
     "keyboard>=0.13.5",
