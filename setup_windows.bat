@@ -5,7 +5,7 @@ REM  This script sets up a local Python environment and installs
 REM  all dependencies needed to run FlowState on Windows.
 REM
 REM  WHAT THIS SCRIPT DOES (nothing hidden):
-REM    1. Checks that Python 3 is installed
+REM    1. Checks for uv or Python 3
 REM    2. Creates a virtual environment in .venv\
 REM    3. Installs Python packages from requirements_win.txt
 REM    4. Downloads the spaCy language model
@@ -23,8 +23,25 @@ echo   FlowState - Windows Setup
 echo  =============================================
 echo.
 
-REM --- Step 1: Check Python -----------------------------------
+REM --- Detect uv ------------------------------------------------
+set USE_UV=0
+uv --version >nul 2>&1
+if %errorlevel% equ 0 (
+    set USE_UV=1
+    echo  [uv detected - using uv for fast install]
+    echo.
+)
+
+REM --- Step 1: Check Python ------------------------------------
 echo [Step 1/4] Checking for Python...
+
+if %USE_UV% equ 1 (
+    REM uv needs a Python interpreter but handles installation itself
+    uv python find >nul 2>&1
+    if %errorlevel% equ 0 goto :python_found
+    echo   No Python found, uv will download one automatically.
+    goto :python_found
+)
 
 REM Try py launcher first (most reliable on Windows), then python, then python3
 set PYTHON_CMD=
@@ -49,23 +66,27 @@ echo.
 echo  ERROR: Python is not installed or not on your PATH.
 echo.
 echo  Please install Python 3.10+ from https://www.python.org/downloads/
-echo  During installation, CHECK "Add Python to PATH" and 
+echo  During installation, CHECK "Add Python to PATH" and
 echo  CHECK "Install py launcher".
 echo.
 pause
 exit /b 1
 
 :python_found
-%PYTHON_CMD% --version
+if %USE_UV% equ 0 %PYTHON_CMD% --version
 echo   OK
 echo.
 
-REM --- Step 2: Create Virtual Environment ---------------------
+REM --- Step 2: Create Virtual Environment -----------------------
 echo [Step 2/4] Creating virtual environment in .venv\ ...
 if exist .venv (
     echo   .venv already exists, skipping creation.
 ) else (
-    %PYTHON_CMD% -m venv .venv
+    if %USE_UV% equ 1 (
+        uv venv .venv
+    ) else (
+        %PYTHON_CMD% -m venv .venv
+    )
     if %errorlevel% neq 0 (
         echo  ERROR: Failed to create virtual environment.
         pause
@@ -75,10 +96,14 @@ if exist .venv (
 echo   OK
 echo.
 
-REM --- Step 3: Install Dependencies --------------------------
+REM --- Step 3: Install Dependencies ---------------------------
 echo [Step 3/4] Installing dependencies from requirements_win.txt...
-call .venv\Scripts\activate.bat
-pip install -r requirements_win.txt
+if %USE_UV% equ 1 (
+    uv pip install -r requirements_win.txt
+) else (
+    call .venv\Scripts\activate.bat
+    pip install -r requirements_win.txt
+)
 if %errorlevel% neq 0 (
     echo.
     echo  ERROR: pip install failed. Check the output above for details.
@@ -88,9 +113,13 @@ if %errorlevel% neq 0 (
 echo   OK
 echo.
 
-REM --- Step 4: Download spaCy Model --------------------------
+REM --- Step 4: Download spaCy Model ---------------------------
 echo [Step 4/4] Downloading spaCy language model (en_core_web_md)...
-python -m spacy download en_core_web_md
+if %USE_UV% equ 1 (
+    uv run python -m spacy download en_core_web_md
+) else (
+    python -m spacy download en_core_web_md
+)
 if %errorlevel% neq 0 (
     echo.
     echo  ERROR: spaCy model download failed.
@@ -100,7 +129,7 @@ if %errorlevel% neq 0 (
 echo   OK
 echo.
 
-REM --- Done --------------------------------------------------
+REM --- Done ---------------------------------------------------
 echo  =============================================
 echo   Setup complete!
 echo  =============================================
@@ -113,12 +142,18 @@ echo.
 echo    2. Navigate to this folder:
 echo       cd %cd%
 echo.
+if %USE_UV% equ 1 (
+echo    3. Start FlowState:
+echo       uv run python src\main_win.py
+echo.
+) else (
 echo    3. Activate the virtual environment:
 echo       .venv\Scripts\activate
 echo.
 echo    4. Start FlowState:
 echo       python src\main_win.py
 echo.
+)
 echo  NOTE: Administrator is required because FlowState uses global
 echo  keyboard hooks to detect hotkeys like Ctrl+Alt+V. This is a
 echo  Windows security requirement, not a FlowState choice.
