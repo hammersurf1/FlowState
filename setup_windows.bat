@@ -157,27 +157,35 @@ echo.
 
 REM --- Step 2: Create Virtual Environment -----------------------
 echo [Step 2/5] Creating virtual environment in .venv\ ...
+set VENV_OK=0
 if exist .venv (
-    echo   .venv already exists, skipping creation.
-) else (
-    if %USE_UV% equ 1 (
-        uv venv --python %PY_VER% .venv
+    call :check_venv_version
+    if %VENV_OK% equ 1 (
+        echo   .venv already exists with correct Python version, skipping.
+        goto :venv_done
     ) else (
-        %PYTHON_CMD% -m venv .venv
-    )
-    if %errorlevel% neq 0 (
-        echo   ERROR: Failed to create virtual environment.
-        pause
-        exit /b 1
+        echo   .venv exists but has wrong Python version. Recreating...
+        rmdir /s /q .venv
     )
 )
+if %USE_UV% equ 1 (
+    uv venv --python %PY_VER% .venv
+) else (
+    %PYTHON_CMD% -m venv .venv
+)
+if %errorlevel% neq 0 (
+    echo   ERROR: Failed to create virtual environment.
+    pause
+    exit /b 1
+)
+:venv_done
 echo   OK
 echo.
 
 REM --- Step 3: Install Dependencies ---------------------------
 echo [Step 3/5] Installing dependencies from requirements_win.txt...
 if %USE_UV% equ 1 (
-    uv pip install -r requirements_win.txt
+    uv pip install --python .venv\Scripts\python.exe -r requirements_win.txt
 ) else (
     call .venv\Scripts\activate.bat
     pip install -r requirements_win.txt
@@ -261,5 +269,26 @@ for /f "tokens=1,2 delims=." %%a in ("%V_NUM%") do (
 
 if %V_MAJ%==3 if %V_MIN% geq 11 if %V_MIN% leq 12 (
     set "PYTHON_CMD=%TEST_CMD%"
+)
+exit /b 0
+
+REM ============================================================
+REM  Helper: check_venv_version
+REM  Checks .venv\Scripts\python.exe version and sets VENV_OK=1
+REM  if the minor version matches %PY_MINOR%.
+REM ============================================================
+:check_venv_version
+.venv\Scripts\python.exe --version >"%VER_FILE%" 2>&1
+if %errorlevel% neq 0 exit /b 0
+
+set /p V=<"%VER_FILE%"
+for /f "tokens=2 delims= " %%a in ("%V%") do set "V_NUM=%%a"
+for /f "tokens=1,2 delims=." %%a in ("%V_NUM%") do (
+    set "V_MAJ=%%a"
+    set "V_MIN=%%b"
+)
+
+if %V_MAJ%==3 if %V_MIN%==%PY_MINOR% (
+    set "VENV_OK=1"
 )
 exit /b 0
