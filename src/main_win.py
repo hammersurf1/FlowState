@@ -15,8 +15,8 @@ import ctypes
 from playwright.sync_api import sync_playwright
 
 from engine import TypingEngine
-from os_layer.playwright_driver_win import PlaywrightDriverWin
-from first_run import ensure_settings_file, check_chrome_installed, show_chrome_required_dialog
+from os_layer.hybrid_driver_win import HybridDriver
+from first_run import ensure_settings_file, ensure_chrome_profile_dir, check_chrome_installed, show_chrome_required_dialog
 from updater import Updater
 from version import __version__
 
@@ -40,6 +40,7 @@ class MainApp:
     def start(self):
         # First-run setup: ensure settings.ini exists
         ensure_settings_file()
+        ensure_chrome_profile_dir()
 
         # Check that Chrome is installed (non-blocking warning if missing)
         if not check_chrome_installed():
@@ -173,7 +174,7 @@ class MainApp:
     def playwright_worker(self):
         try:
             with sync_playwright() as p:
-                driver = PlaywrightDriverWin(p)
+                driver = HybridDriver(p)
                 self.engine = TypingEngine(driver)
 
                 # Bind UI callbacks

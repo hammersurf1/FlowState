@@ -84,6 +84,27 @@ def check_chrome_installed():
     return False
 
 
+def ensure_chrome_profile_dir():
+    """Create the dedicated Chrome profile directory used by the
+    FlowState Chrome shortcut launcher."""
+    system = platform.system()
+    if system == "Windows":
+        profile_dir = os.path.join(
+            os.environ.get("LOCALAPPDATA", ""), "FlowState", "ChromeProfile"
+        )
+    elif system == "Darwin":
+        profile_dir = os.path.join(
+            os.path.expanduser("~"),
+            "Library",
+            "Application Support",
+            "FlowState",
+            "ChromeProfile",
+        )
+    else:
+        return
+    os.makedirs(profile_dir, exist_ok=True)
+
+
 def show_chrome_required_dialog():
     """
     Show a user-friendly dialog explaining that Chrome is required.
@@ -103,6 +124,7 @@ def show_chrome_required_dialog():
         system = platform.system()
         if system == "Darwin":
             hotkey = "⌘+⌥+V"
+            chrome_name = "Google Chrome"
             download_note = (
                 "Download Chrome from:\n"
                 "https://www.google.com/chrome\n\n"
@@ -117,11 +139,15 @@ def show_chrome_required_dialog():
             )
 
         messagebox.showwarning(
-            "FlowState — Chrome Required",
-            f"FlowState needs Google Chrome to work.\n\n"
-            f"FlowState types into Chrome browser tabs by connecting to\n"
-            f"Chrome's debugging interface. When you press {hotkey},\n"
-            f"FlowState will simulate typing in the active Chrome tab.\n\n"
+            "FlowState — Chrome Required for Browser Mode",
+            f"FlowState works in TWO modes:\n\n"
+            f"  1. Browser Mode (Playwright)\n"
+            f"     Types into {chrome_name} tabs via the debug port.\n"
+            f"     Open Chrome with the 'FlowState Chrome' shortcut first,\n"
+            f"     then press {hotkey} in that Chrome window.\n\n"
+            f"  2. OS Mode\n"
+            f"     Types into ANY app using OS-level keystrokes.\n"
+            f"     Just press {hotkey} in any window — no Chrome needed.\n\n"
             f"{download_note}"
         )
 
@@ -130,11 +156,14 @@ def show_chrome_required_dialog():
     except Exception as e:
         # If tkinter is unavailable, fall back to a console message
         print("=" * 50)
-        print("  FlowState — Chrome Required")
+        print("  FlowState — Chrome Required for Browser Mode")
         print("=" * 50)
         print()
-        print("  FlowState needs Google Chrome to work.")
-        print("  Download from: https://www.google.com/chrome")
+        print("  FlowState works in two modes:")
+        print("    1. Browser Mode — types into Chrome via debug port")
+        print("    2. OS Mode      — types into any app with OS keystrokes")
+        print()
+        print("  Download Chrome from: https://www.google.com/chrome")
         print()
         print(f"  (tkinter dialog failed: {e})")
         print("=" * 50)

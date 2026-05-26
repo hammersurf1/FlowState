@@ -6,9 +6,10 @@ import os
 datas = [
     ('settings.ini.example', '.'),
     ('assets', 'assets'),
+    ('scripts/launch_chrome_win.bat', '.'),
 ]
 binaries = []
-hiddenimports = ['settings_gui', 'first_run', 'updater', 'version']
+hiddenimports = ['settings_gui', 'first_run', 'updater', 'version', 'os_layer.os_typing_driver_win', 'os_layer.hybrid_driver_win']
 
 # Collect playwright LIBRARY only — not the browser binaries.
 tmp_ret = collect_all('playwright')

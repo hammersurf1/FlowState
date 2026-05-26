@@ -15,7 +15,7 @@ from playwright.sync_api import sync_playwright
 
 from engine import TypingEngine
 from os_layer.playwright_driver_mac import PlaywrightDriverMac
-from first_run import ensure_settings_file, check_chrome_installed, show_chrome_required_dialog
+from first_run import ensure_settings_file, ensure_chrome_profile_dir, check_chrome_installed, show_chrome_required_dialog
 from updater import Updater
 from version import __version__
 
@@ -41,6 +41,7 @@ class MainApp:
     def start(self):
         # First-run setup: ensure settings.ini exists
         ensure_settings_file()
+        ensure_chrome_profile_dir()
 
         # Check that Chrome is installed (non-blocking warning if missing)
         if not check_chrome_installed():
