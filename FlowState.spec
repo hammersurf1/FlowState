@@ -9,7 +9,7 @@ datas = [
     ('scripts/launch_chrome_win.bat', '.'),
 ]
 binaries = []
-hiddenimports = ['settings_gui', 'first_run', 'updater', 'version', 'os_layer.os_typing_driver_win', 'os_layer.hybrid_driver_win']
+hiddenimports = ['settings_gui', 'first_run', 'updater', 'version', 'os_layer.os_typing_driver_win', 'os_layer.hybrid_driver_win', 'os_layer.playwright_driver_win', 'os_layer.playwright_driver_mac', 'rich_text_formatter', 'semantic_analyzer', 'typing_planner', 'formatters', 'formatters.google_docs_formatter', 'formatters.instruction', 'formatters.backends.cdp_backend', 'formatters.backends.os_backend']
 
 # Collect playwright LIBRARY only — not the browser binaries.
 tmp_ret = collect_all('playwright')

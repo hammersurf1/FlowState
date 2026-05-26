@@ -222,6 +222,38 @@ class PlaywrightDriverWin:
         if self.page:
             self.page.keyboard.press("Tab", delay=10)
 
+
+    def send_formatting_key(self, key):
+        """Send a formatting keystroke via Playwright (Ctrl+B, Ctrl+I, etc.)."""
+        if self.page:
+            self.page.keyboard.press(key, delay=10)
+
+    def inject_html(self, html):
+        """Inject raw HTML at the cursor position (used for tables, HR)."""
+        if self.page:
+            escaped = html.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+            self.page.evaluate(f'''
+                (() => {{
+                    const sel = window.getSelection();
+                    if (sel.rangeCount) {{
+                        const r = sel.getRangeAt(0);
+                        r.deleteContents();
+                        const frag = r.createContextualFragment('{escaped}');
+                        r.insertNode(frag);
+                        r.collapse(false);
+                    }}
+                }})()
+            ''')
+
+    def is_google_docs(self):
+        """True if the active page is a Google Docs document."""
+        try:
+            if self.page:
+                return "docs.google.com/document" in self.page.url
+        except Exception:
+            pass
+        return False
+
     def send_key(self, shortcut):
         """Send an arbitrary keyboard shortcut via Playwright (e.g. 'Control+b')."""
         if self.page:

@@ -34,6 +34,7 @@ jobs:
         run: |
           pip install -r requirements_win.txt
           pip install pyinstaller
+          playwright install chromium
 
       - name: Download spaCy Model
         run: |
@@ -90,6 +91,7 @@ jobs:
         run: |
           pip install -r requirements_mac.txt
           pip install pyinstaller
+          playwright install chromium
 
       - name: Download spaCy Model
         run: |

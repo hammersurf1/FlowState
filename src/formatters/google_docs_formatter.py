@@ -224,14 +224,14 @@ def _parse_tagged(text: str) -> list[Instruction]:
         m = _TAG_RE.search(text, pos)
         if not m:
             remaining = text[pos:]
-            if remaining and not _is_whitespace_only(remaining):
+            if remaining:
                 _emit_text(remaining)
             break
 
         # Text before this tag
         if m.start() > pos:
             chunk = text[pos : m.start()]
-            if chunk and not _is_whitespace_only(chunk):
+            if chunk:
                 _emit_text(chunk)
 
         raw = m.group().lower()
@@ -249,7 +249,16 @@ def _parse_tagged(text: str) -> list[Instruction]:
                 _pop_stack(stack, "u")
                 instructions.append(UnderlineOff())
             elif tag_name == "h2":
-                instructions.append(BoldOff())
+                # Replace placeholder Heading2 with real content
+                heading_text = ""
+                # Walk backwards to find the placeholder and collect Text content
+                for j in range(len(instructions) - 1, -1, -1):
+                    if isinstance(instructions[j], Heading2) and instructions[j].content == "":
+                        instructions[j] = Heading2(heading_text)
+                        break
+                    elif isinstance(instructions[j], Text):
+                        heading_text = instructions[j].content + heading_text
+                        instructions[j] = Text("")  # consumed
             elif tag_name == "table":
                 if table_buffer:
                     instructions.append(TableStart())
@@ -269,6 +278,15 @@ def _parse_tagged(text: str) -> list[Instruction]:
                 _flush_cell()
                 in_td = False
             elif tag_name == "li":
+                # Collect bullet text into the BulletItem placeholder
+                bullet_text = ""
+                for j in range(len(instructions) - 1, -1, -1):
+                    if isinstance(instructions[j], BulletItem) and instructions[j].content == "":
+                        instructions[j] = BulletItem(bullet_text)
+                        break
+                    elif isinstance(instructions[j], Text):
+                        bullet_text = instructions[j].content + bullet_text
+                        instructions[j] = Text("")  # consumed
                 instructions.append(Enter())
             elif tag_name == "ol":
                 in_ol = False
@@ -285,7 +303,7 @@ def _parse_tagged(text: str) -> list[Instruction]:
                 instructions.append(UnderlineOn())
                 stack.append("u")
             elif tag_name == "h2":
-                instructions.append(BoldOn())
+                instructions.append(Heading2(""))  # placeholder, filled at close
             elif tag_name == "hr":
                 instructions.append(HorizontalRule())
             elif tag_name == "table":
@@ -302,7 +320,7 @@ def _parse_tagged(text: str) -> list[Instruction]:
                     ol_counter += 1
                     instructions.append(Text(f"{ol_counter}. "))
                 else:
-                    instructions.append(Text("- "))
+                    instructions.append(BulletItem(""))  # placeholder, filled at close
             elif tag_name == "ol":
                 in_ol = True
                 ol_counter = 0
@@ -310,6 +328,9 @@ def _parse_tagged(text: str) -> list[Instruction]:
                 instructions.append(Enter())
 
         pos = m.end()
+
+    # Clean up empty Text instructions (artifacts from heading/bullet collection)
+    instructions = [i for i in instructions if not (isinstance(i, Text) and i.content == "")]
 
     # Close any unclosed formatting tags
     for tag in reversed(stack):

@@ -22,7 +22,7 @@ from .os_typing_driver_win import OsTypingDriverWin
 from .playwright_driver_win import PlaywrightDriverWin
 
 
-class HybridDriverWin:
+class HybridDriver:
     """
     Auto-detects whether typing should go through Playwright (CDP) or
     OS-level keystrokes based on foreground window and CDP availability.
