@@ -330,7 +330,7 @@ class TypingEngine:
             self._finger_map = FINGER_MAPS.get(layout_name, FINGER_MAPS["QWERTY"])
             neighbor_map = LAYOUTS.get(layout_name, LAYOUTS["QWERTY"])
 
-            if self.settings["EnableRichText"]:
+            if self.settings["EnableRichText"] and getattr(self.driver, "is_playwright_mode", lambda: False)():
                 actions = self._formatter.parse(clipboard_text)
                 self._execute_actions(actions, neighbor_map)
             else:

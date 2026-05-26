@@ -86,13 +86,12 @@ class OsTypingDriverMac:
         )
 
     def send_key(self, shortcut):
-        # Parse shortcuts like 'command+b' for bold
-        parts = shortcut.lower().replace("command", "cmd").split("+")
-        key = parts[-1]
-        modifiers = parts[:-1]
-        mod_str = ", ".join(f"{m} down" for m in modifiers)
-        if mod_str:
-            mod_str += ", "
-        script = f'tell application "System Events" to keystroke "{key}" using {mod_str}'
-        import subprocess
-        subprocess.run(["osascript", "-e", script], timeout=2)
+        # In OS mode, only pass through structural keys (Enter, Tab).
+        # Formatting shortcuts are silently ignored.
+        s = shortcut.lower()
+        if "enter" in s or s == "tab":
+            import subprocess
+            key_name = "return" if "enter" in s else "tab"
+            script = f'tell application "System Events" to keystroke {key_name}'
+            subprocess.run(["osascript", "-e", script], timeout=2)
+        # else: formatting shortcut — silently ignored

@@ -79,11 +79,15 @@ class HybridDriver:
             return False
 
     def _is_flowstate_chrome_foreground(self):
+        """True if the foreground window appears to be Chrome with remote debugging."""
         pid = self._get_foreground_pid()
         if not pid:
             return False
         cmdline = self._get_cmdline_for_pid(pid)
-        return self.FLOWSTATE_PROFILE_MARKER in cmdline
+        # Accept any Chrome with --remote-debugging-port, not just our shortcut
+        return ("chrome" in cmdline.lower() and
+                ("remote-debugging-port" in cmdline or
+                 self.FLOWSTATE_PROFILE_MARKER in cmdline))
 
     # ── Lifecycle ─────────────────────────────────────────────────
 
@@ -126,6 +130,10 @@ class HybridDriver:
         self._mode = None
 
     # ── Google Docs detection ─────────────────────────────────────
+
+    def is_playwright_mode(self):
+        """True if the driver is currently in Playwright (CDP) mode."""
+        return self._mode == "playwright"
 
     def is_google_docs(self):
         """True if active page is a Google Docs document (Playwright only)."""
