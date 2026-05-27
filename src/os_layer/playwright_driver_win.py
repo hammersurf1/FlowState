@@ -227,6 +227,7 @@ class PlaywrightDriverWin:
         """Send a formatting keystroke via Playwright (Ctrl+B, Ctrl+I, etc.)."""
         if self.page:
             self.page.keyboard.press(key, delay=10)
+            time.sleep(0.05)  # let Google Docs process the formatting toggle
 
     def inject_html(self, html):
         """Inject raw HTML at the cursor position (used for tables, HR)."""
@@ -244,6 +245,7 @@ class PlaywrightDriverWin:
                     }}
                 }})()
             ''')
+            time.sleep(0.05)
 
     def is_google_docs(self):
         """True if the active page is a Google Docs document."""
@@ -255,6 +257,9 @@ class PlaywrightDriverWin:
         return False
 
     def send_key(self, shortcut):
-        """Send an arbitrary keyboard shortcut via Playwright (e.g. 'Control+b')."""
+        """Send an arbitrary keyboard shortcut via Playwright (e.g. 'Control+b').
+        Adds a small delay after the press so Google Docs can process the event
+        before the next insert_text() call."""
         if self.page:
             self.page.keyboard.press(shortcut, delay=10)
+            time.sleep(0.05)
