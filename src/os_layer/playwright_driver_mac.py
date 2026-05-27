@@ -212,16 +212,20 @@ class PlaywrightDriverMac:
             self.page.keyboard.insert_text(char)
 
     def send_backspace(self):
-        self._dispatch_key("Backspace")
+        if self.page:
+            self.page.keyboard.press("Backspace", delay=10)
 
     def send_shift_enter(self):
-        self._dispatch_key("Shift+Enter")
+        if self.page:
+            self.page.keyboard.press("Shift+Enter", delay=10)
 
     def send_enter(self):
-        self._dispatch_key("Enter")
+        if self.page:
+            self.page.keyboard.press("Enter", delay=10)
 
     def send_tab(self):
-        self._dispatch_key("Tab")
+        if self.page:
+            self.page.keyboard.press("Tab", delay=10)
 
 
     def send_formatting_key(self, key):
