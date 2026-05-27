@@ -387,6 +387,11 @@ class TypingEngine:
                 actions = None
                 if _HAS_CLIPBOARD_HTML:
                     try:
+                        from clipboard_reader import get_clipboard_html
+                        raw_html = get_clipboard_html()
+                        if raw_html:
+                            self._debug_log(f"CLIPBOARD HTML: {len(raw_html)} bytes")
+                            self._debug_log(f"HTML PREVIEW: {repr(raw_html[:500])}")
                         runs = get_clipboard_styled_runs()
                         if runs:
                             self._debug_log(f"HTML: {len(runs)} styled runs from clipboard")
