@@ -177,6 +177,9 @@ class MainApp:
                 driver = HybridDriver(p)
                 self.engine = TypingEngine(driver)
 
+                # Debug logging — set to True to write ~/.flowstate/debug.log
+                self.engine.enable_debug(False)
+
                 # Bind UI callbacks
                 self.engine.ui_update_callback = self.update_tray
                 self.engine.status_callback = self.update_tray
