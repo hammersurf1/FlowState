@@ -11,6 +11,11 @@ import sys
 from rich_text_formatter import RichTextFormatter, TypeAction, KeyAction, _platform_string
 from semantic_analyzer import SemanticAnalyzer
 from typing_planner import TypingPlanner
+try:
+    from clipboard_reader import get_clipboard_styled_runs, StyledRun
+    _HAS_CLIPBOARD_HTML = True
+except ImportError:
+    _HAS_CLIPBOARD_HTML = False
 
 class StopTypingException(Exception):
     pass
@@ -370,7 +375,21 @@ class TypingEngine:
             neighbor_map = LAYOUTS.get(layout_name, LAYOUTS["QWERTY"])
 
             if self.settings["EnableRichText"] and getattr(self.driver, "is_playwright_mode", lambda: False)():
-                actions = self._formatter.parse(clipboard_text)
+                # Try HTML clipboard first (preserves formatting from Google Docs)
+                actions = None
+                if _HAS_CLIPBOARD_HTML:
+                    try:
+                        runs = get_clipboard_styled_runs()
+                        if runs:
+                            self._debug_log(f"HTML: {len(runs)} styled runs from clipboard")
+                            actions = self._styled_runs_to_actions(runs)
+                    except Exception as e:
+                        self._debug_log(f"HTML clipboard failed: {e}")
+                
+                if actions is None:
+                    # Fall back to markdown parsing
+                    actions = self._formatter.parse(clipboard_text)
+                
                 self._execute_actions(actions, neighbor_map)
             else:
                 self._type_plain_text(clipboard_text, neighbor_map)
@@ -414,6 +433,63 @@ class TypingEngine:
                 self.current_momentum = 0
 
     # ─── Plain-text Typing Loop ──────────────────────────────────────────────
+
+    def _styled_runs_to_actions(self, runs):
+        """Convert clipboard HTML styled runs to TypeAction/KeyAction list."""
+        mod = self._formatter._mod  # "Control" or "Meta"
+        actions = []
+        prev = {"bold": False, "italic": False, "underline": False, "heading": 0}
+        
+        for run in runs:
+            text = run.text
+            
+            # Handle newlines
+            if text == "\n":
+                actions.append(KeyAction("\n"))
+                prev = {"bold": False, "italic": False, "underline": False, "heading": 0}
+                continue
+            
+            if not text.strip():
+                actions.append(TypeAction(text))
+                continue
+            
+            # Heading change
+            if run.heading_level != prev["heading"]:
+                if prev["heading"]:
+                    # Reset to normal
+                    actions.append(KeyAction(f"{mod}+Alt+0"))
+                if run.heading_level:
+                    actions.append(KeyAction(f"{mod}+Alt+{run.heading_level}"))
+                prev["heading"] = run.heading_level
+            
+            # Bold toggle
+            if run.bold != prev["bold"]:
+                actions.append(KeyAction(f"{mod}+b"))
+                prev["bold"] = run.bold
+            
+            # Italic toggle
+            if run.italic != prev["italic"]:
+                actions.append(KeyAction(f"{mod}+i"))
+                prev["italic"] = run.italic
+            
+            # Underline toggle
+            if run.underline != prev["underline"]:
+                actions.append(KeyAction(f"{mod}+u"))
+                prev["underline"] = run.underline
+            
+            actions.append(TypeAction(text))
+        
+        # Close any open formatting
+        if prev["bold"]:
+            actions.append(KeyAction(f"{mod}+b"))
+        if prev["italic"]:
+            actions.append(KeyAction(f"{mod}+i"))
+        if prev["underline"]:
+            actions.append(KeyAction(f"{mod}+u"))
+        if prev["heading"]:
+            actions.append(KeyAction(f"{mod}+Alt+0"))
+        
+        return actions
 
     def _type_plain_text(self, clipboard_text, neighbor_map):
         """Entry point. Chooses semantic path or legacy path."""
