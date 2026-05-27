@@ -49,17 +49,18 @@ def get_clipboard_html() -> str | None:
 
         # Lock global memory
         kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalSize.restype = ctypes.c_size_t
+        kernel32.GlobalSize.argtypes = [ctypes.c_void_p]
         p_data = kernel32.GlobalLock(h_data)
         if not p_data:
             return None
         try:
             size = kernel32.GlobalSize(h_data)
-            if size == 0:
+            if size == 0 or size > 50_000_000:  # sanity cap at 50MB
                 return None
-            # Copy to Python bytes
-            buf = ctypes.create_string_buffer(size)
-            ctypes.memmove(buf, p_data, size)
-            raw = buf.raw
+            # Read in chunks to avoid huge allocations
+            buf = (ctypes.c_char * size).from_address(p_data)
+            raw = bytes(buf)
 
             # CF_HTML has a header like:
             #   Version:0.9\r\nStartHTML:00000123\r\nEndHTML:00004567\r\n...

@@ -397,6 +397,11 @@ class TypingEngine:
                 if actions is None:
                     # Fall back to markdown parsing
                     actions = self._formatter.parse(clipboard_text)
+
+                # Reset formatting state before typing (Google Docs may have
+                # bold/italic/underline left over from previous edits).
+                reset = [KeyAction(f"{self._formatter._mod}+Alt+0")]  # Normal Text
+                actions = reset + actions
                 
                 self._execute_actions(actions, neighbor_map)
             else:
