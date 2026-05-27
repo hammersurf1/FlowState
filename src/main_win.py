@@ -168,8 +168,15 @@ class MainApp:
         self.updater.launch_installer_and_exit()
 
     def exit_app(self):
-        self.tray_icon.stop()
-        sys.exit(0)
+        # Avoid raising SystemExit inside pystray callback dispatch.
+        try:
+            keyboard.unhook_all_hotkeys()
+        except Exception:
+            pass
+        if self.engine is not None:
+            self.engine.set_state(running=False, paused=False)
+        if self.tray_icon is not None:
+            self.tray_icon.stop()
 
     def playwright_worker(self):
         try:

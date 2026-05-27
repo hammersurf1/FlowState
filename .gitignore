@@ -24,3 +24,6 @@ GEMINI.md
 .DS_Store
 Thumbs.db
 main.py.bak
+
+# Debug session artifacts
+debug-*.log

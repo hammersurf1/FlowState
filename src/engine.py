@@ -2,31 +2,11 @@ import time
 import random
 import configparser
 import os
-import json
 import datetime
 import html as html_lib
 from pathlib import Path
 import subprocess
 import sys
-
-# #region agent log
-def _agent_debug_log(location: str, message: str, data: dict, hypothesis_id: str, run_id: str = "run1") -> None:
-    try:
-        payload = {
-            "sessionId": "33ea5b",
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        log_path = Path(__file__).resolve().parent.parent / "debug-33ea5b.log"
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-# #endregion
 
 from rich_text_formatter import RichTextFormatter, TypeAction, KeyAction, PasteHtmlAction, _platform_string
 from semantic_analyzer import SemanticAnalyzer
@@ -460,18 +440,17 @@ class TypingEngine:
                 # Google Docs can parse HTML when it's provided through
                 # the native clipboard paste handler.
                 html = action.html
-                # #region agent log
-                _agent_debug_log(
-                    "engine.py:_execute_actions",
-                    "dispatch paste_html action",
-                    {"html_prefix": html[:120], "html_len": len(html)},
-                    "H2",
-                )
-                # #endregion
                 if hasattr(self.driver, 'paste_html'):
                     self.driver.paste_html(html)
                 else:
                     self.driver.inject_html(html)
+                if html.strip().lower() == "<hr>":
+                    # Move below the inserted rule so following Enter keys create
+                    # real blank paragraphs between consecutive horizontal lines.
+                    self._sleep(random.randint(80, 150) / 1000.0)
+                    if hasattr(self.driver, "send_key"):
+                        self.driver.send_key("ArrowDown")
+                    self._sleep(random.randint(80, 150) / 1000.0)
                 continue
             if isinstance(action, TypeAction):
                 self._type_plain_text(action.text, neighbor_map)
@@ -486,15 +465,7 @@ class TypingEngine:
                 elif shortcut == "Enter":
                     # Explicit Enter (from headings/lists) stays as Enter
                     pass
-                # #region agent log
-                if shortcut in ("Enter", "Shift+Enter", f"{self._formatter._mod}+Alt+0", f"{self._formatter._mod}+Alt+1", f"{self._formatter._mod}+Alt+2"):
-                    _agent_debug_log(
-                        "engine.py:_execute_actions",
-                        "dispatch key action",
-                        {"shortcut": shortcut},
-                        "H1",
-                    )
-                # #endregion
+
                 # Small human-like pause before the shortcut
                 self._sleep(random.randint(60, 130) / 1000.0)
                 self._debug_log(f"KEY: {shortcut}")
@@ -553,15 +524,27 @@ class TypingEngine:
                 actions.append(KeyAction(f"{mod}+u"))
                 prev["underline"] = False
 
-        def _exit_list():
+        def _exit_list(reason: str = "unknown", idx: int = -1, next_kind: str | None = None):
             """Exit list mode by pressing Enter twice (empty bullet → exit)."""
             nonlocal in_list, current_list_type
             if in_list:
-                actions.append(KeyAction("Enter"))
-                actions.append(KeyAction("Enter"))
+                # If the next source element is already an explicit blank block,
+                # avoid stacking list-exit spacing + blank spacing.
+                if next_kind == "blank":
+                    actions.append(KeyAction("Enter"))
+                elif next_kind == "paragraph":
+                    # Google Docs: Enter leaves empty list item, second exits list,
+                    # third creates the blank line before the next section header.
+                    actions.append(KeyAction("Enter"))
+                    actions.append(KeyAction("Enter"))
+                    actions.append(KeyAction("Enter"))
+                else:
+                    actions.append(KeyAction("Enter"))
+                    actions.append(KeyAction("Enter"))
                 in_list = False
                 current_list_type = ""
         
+        prev_kind: str | None = None
         for idx, el in enumerate(elements):
             # Peek at next element to decide list continuation
             next_el = elements[idx + 1] if idx + 1 < len(elements) else None
@@ -570,7 +553,7 @@ class TypingEngine:
                 if not self._element_has_text(el):
                     continue
                 _close_inline()
-                _exit_list()
+                _exit_list(reason="before heading", idx=idx, next_kind=next_el.kind if next_el else None)
                 # Apply heading style
                 level = min(el.level, 6)
                 actions.append(KeyAction(f"{mod}+Alt+{level}"))
@@ -578,14 +561,6 @@ class TypingEngine:
                 for run in el.runs:
                     self._emit_inline_run(run, actions, mod, prev)
                 _close_inline()
-                # #region agent log
-                _agent_debug_log(
-                    "engine.py:_elements_to_actions",
-                    "heading actions created",
-                    {"level": level, "text": "".join(r.text for r in el.runs)[:80], "next_kind": next_el.kind if next_el else None},
-                    "H1",
-                )
-                # #endregion
                 # Enter after heading — Google Docs automatically reverts
                 # to Normal Text on the next line after a heading
                 actions.append(KeyAction("Enter"))
@@ -596,7 +571,7 @@ class TypingEngine:
                 
             elif el.kind == "table":
                 _close_inline()
-                _exit_list()
+                _exit_list(reason="before table", idx=idx, next_kind=next_el.kind if next_el else None)
                 # Ensure pasted table does not inherit heading/list paragraph style.
                 actions.append(KeyAction(f"{mod}+Alt+0"))
                 # Build table HTML for clipboard paste (preserve inline formatting)
@@ -609,26 +584,20 @@ class TypingEngine:
                         html += f"<{tag} style=\"border:1pt solid #000;padding:5pt\">{cell_html}</{tag}>"
                     html += "</tr>"
                 html += "</tbody></table>"
-                # #region agent log
-                _agent_debug_log(
-                    "engine.py:_elements_to_actions",
-                    "table actions created",
-                    {"rows": len(el.rows), "first_row_cells": len(el.rows[0].cells) if el.rows else 0},
-                    "H2",
-                )
-                # #endregion
                 actions.append(PasteHtmlAction(html))
                 actions.append(KeyAction("Enter"))
                 
             elif el.kind == "hr":
                 _close_inline()
-                _exit_list()
+                _exit_list(reason="before hr", idx=idx, next_kind=next_el.kind if next_el else None)
                 actions.append(PasteHtmlAction("<hr>"))
                 actions.append(KeyAction("Enter"))
+                if next_el is not None and next_el.kind in ("blank", "hr"):
+                    actions.append(KeyAction("Enter"))
 
             elif el.kind == "page_break":
                 _close_inline()
-                _exit_list()
+                _exit_list(reason="before page_break", idx=idx, next_kind=next_el.kind if next_el else None)
                 # Google Docs: Ctrl+Enter inserts page break
                 actions.append(KeyAction(f"{mod}+Enter"))
                 actions.append(KeyAction("Enter"))
@@ -644,7 +613,7 @@ class TypingEngine:
                     in_list = True
                     current_list_type = el.list_type
                 elif el.list_type != current_list_type:
-                    _exit_list()
+                    _exit_list(reason="switch list type", idx=idx, next_kind=next_el.kind if next_el else None)
                     actions.append(KeyAction(list_shortcut))
                     in_list = True
                     current_list_type = el.list_type
@@ -656,12 +625,12 @@ class TypingEngine:
                 if next_el is not None and next_el.kind == "list_item":
                     actions.append(KeyAction("Enter"))
                 else:
-                    _exit_list()
+                    _exit_list(reason="after final list item", idx=idx, next_kind=next_el.kind if next_el else None)
                 
             elif el.kind == "paragraph":
                 if not self._element_has_text(el):
                     continue
-                _exit_list()
+                _exit_list(reason="before paragraph", idx=idx, next_kind=next_el.kind if next_el else None)
                 para_preview = "".join(r.text for r in el.runs).strip()[:80]
                 for run in el.runs:
                     text = run.text
@@ -669,25 +638,29 @@ class TypingEngine:
                         continue  # skip standalone newline runs
                     self._emit_inline_run(run, actions, mod, prev)
                 _close_inline()
-                # #region agent log
-                _agent_debug_log(
-                    "engine.py:_elements_to_actions",
-                    "paragraph actions created",
-                    {"preview": para_preview, "next_kind": next_el.kind if next_el else None},
-                    "H3",
-                )
-                # #endregion
+
                 # Hard Enter between block paragraphs — Shift+Enter merges into
                 # the next list item in Google Docs.
                 actions.append(KeyAction("Enter"))
+                if next_el is not None and next_el.kind == "paragraph":
+                    # Consecutive paragraph blocks need an extra Enter to
+                    # preserve blank-line separation in downstream markdown export.
+                    actions.append(KeyAction("Enter"))
+                elif next_el is not None and next_el.kind == "list_item":
+                    # Blank line between section intro text and first list item
+                    # (e.g. "Learning targets:" uses mixed bold/normal runs).
+                    actions.append(KeyAction("Enter"))
             elif el.kind == "blank":
                 _close_inline()
-                _exit_list()
+                _exit_list(reason="before blank", idx=idx, next_kind=next_el.kind if next_el else None)
                 # Explicit blank paragraph from source HTML.
                 actions.append(KeyAction("Enter"))
+
         
+            prev_kind = el.kind
+
         _close_inline()
-        _exit_list()
+        _exit_list(reason="finalize actions")
         return actions
     
     def _emit_inline_run(self, run, actions, mod, prev):

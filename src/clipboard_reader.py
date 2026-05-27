@@ -22,12 +22,14 @@ import ctypes.wintypes
 import re
 from html.parser import HTMLParser
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional
+from typing import List, Optional
 
 
 # ── Windows Clipboard API ────────────────────────────────────────────
 
 CF_HTML: int = 0
+
+
 
 def _register_html_format():
     global CF_HTML
@@ -401,7 +403,18 @@ class _GDocsHTMLParser(HTMLParser):
         """True when an element carries real text (not just whitespace/newlines)."""
         if el.kind in ("hr", "page_break"):
             return True
-        return any(r.text.strip() for r in el.runs)
+        return any(self._normalized_text(r.text).strip() for r in el.runs)
+
+    @staticmethod
+    def _normalized_text(text: str) -> str:
+        # Treat common non-breaking/zero-width characters as whitespace so
+        # spacer paragraphs around <hr> become semantic blank lines.
+        return (
+            text.replace("\u00A0", " ")
+            .replace("\u2007", " ")
+            .replace("\u202F", " ")
+            .replace("\u200B", "")
+        )
 
     def _finish_element(self):
         """Close the current element and append to elements list."""
@@ -435,7 +448,9 @@ def parse_clipboard_html(html: str) -> List[DocElement]:
     html = re.sub(r'<meta[^>]*>', '', html, flags=re.IGNORECASE)
     parser.feed(html)
     parser.close()
-    return _promote_paragraph_lists(parser.elements)
+    promoted = _promote_paragraph_lists(parser.elements)
+
+    return promoted
 
 
 def _promote_paragraph_lists(elements: List[DocElement]) -> List[DocElement]:
