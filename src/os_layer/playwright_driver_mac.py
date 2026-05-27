@@ -10,6 +10,7 @@ class PlaywrightDriverMac:
         self.browser = None
         self.context = None
         self.page = None
+        self._cdp = None  # CDP session
 
     def attach(self, window_title=None):
         if self.browser:
@@ -40,6 +41,7 @@ class PlaywrightDriverMac:
     def detach(self):
         # Sever the connection completely when typing finishes
         print("Detaching from Chrome...")
+        self._release_cdp()
         if self.browser:
             try:
                 self.browser.close()
@@ -210,26 +212,121 @@ class PlaywrightDriverMac:
             self.page.keyboard.insert_text(char)
 
     def send_backspace(self):
-        if self.page:
-            self.page.keyboard.press("Backspace", delay=10)
+        self._dispatch_key("Backspace")
 
     def send_shift_enter(self):
-        if self.page:
-            self.page.keyboard.press("Shift+Enter", delay=10)
+        self._dispatch_key("Shift+Enter")
 
     def send_enter(self):
-        if self.page:
-            self.page.keyboard.press("Enter", delay=10)
+        self._dispatch_key("Enter")
 
     def send_tab(self):
-        if self.page:
-            self.page.keyboard.press("Tab", delay=10)
+        self._dispatch_key("Tab")
 
 
     def send_formatting_key(self, key):
         """Send a formatting keystroke via Playwright (Ctrl+B, Ctrl+I, etc.)."""
-        if self.page:
-            self.page.keyboard.press(key, delay=10)
+        self._dispatch_key(key)
+
+    # -- Editor focus --
+
+    def _focus_editor(self):
+        """Click into the Google Docs editor to ensure keyboard focus."""
+        if not self.page:
+            return
+        try:
+            self.page.evaluate("""
+                (() => {
+                    const iframe = document.querySelector('.docs-texteventtarget-iframe');
+                    if (iframe) {
+                        iframe.focus();
+                        iframe.contentWindow.focus();
+                    }
+                    const surface = document.querySelector('.kix-appview-editor');
+                    if (surface) surface.click();
+                })()
+            """)
+            time.sleep(0.02)
+        except Exception:
+            pass
+
+    # -- CDP Key Dispatch --
+
+    def _get_cdp(self):
+        if self._cdp is None and self.page:
+            self._cdp = self.page.context.new_cdp_session(self.page)
+        return self._cdp
+
+    def _release_cdp(self):
+        if self._cdp is not None:
+            try:
+                self._cdp.detach()
+            except Exception:
+                pass
+            self._cdp = None
+
+    def _dispatch_key(self, chord):
+        if not self.page:
+            return
+        self._focus_editor()
+        cdp = self._get_cdp()
+        if cdp is None:
+            return
+        parts = [p.strip() for p in chord.split("+")]
+        modifiers = []
+        main_key = None
+        for part in parts:
+            part_lower = part.lower()
+            mi = _MODIFIER_MAP.get(part_lower)
+            if mi:
+                modifiers.append(mi)
+            else:
+                main_key = part
+        if main_key is None:
+            main_key = parts[-1]
+        key_info = _KEY_MAP.get(main_key)
+        if key_info is None:
+            if len(main_key) == 1:
+                code = "Key" + main_key.upper()
+                vk = ord(main_key.upper())
+                key_info = (code, main_key.lower(), vk)
+            else:
+                key_info = (main_key, main_key, 0)
+        code, key, vk = key_info
+        mod_bits = 0
+        for mod_code, mod_key, mod_vk, mod_bit in modifiers:
+            mod_bits |= mod_bit
+            cdp.send("Input.dispatchKeyEvent", {
+                "type": "keyDown",
+                "code": mod_code,
+                "key": mod_key,
+                "modifiers": mod_bits,
+                "windowsVirtualKeyCode": mod_vk,
+            })
+        cdp.send("Input.dispatchKeyEvent", {
+            "type": "keyDown",
+            "code": code,
+            "key": key,
+            "modifiers": mod_bits,
+            "windowsVirtualKeyCode": vk,
+        })
+        cdp.send("Input.dispatchKeyEvent", {
+            "type": "keyUp",
+            "code": code,
+            "key": key,
+            "modifiers": mod_bits,
+            "windowsVirtualKeyCode": vk,
+        })
+        for mod_code, mod_key, mod_vk, mod_bit in reversed(modifiers):
+            mod_bits &= ~mod_bit
+            cdp.send("Input.dispatchKeyEvent", {
+                "type": "keyUp",
+                "code": mod_code,
+                "key": mod_key,
+                "modifiers": mod_bits,
+                "windowsVirtualKeyCode": mod_vk,
+            })
+        time.sleep(0.05)
 
     def inject_html(self, html):
         """Inject raw HTML at the cursor position (used for tables, HR)."""
@@ -259,5 +356,38 @@ class PlaywrightDriverMac:
 
     def send_key(self, shortcut):
         """Send an arbitrary keyboard shortcut via Playwright (e.g. 'Meta+b')."""
-        if self.page:
-            self.page.keyboard.press(shortcut, delay=10)
+        self._dispatch_key(shortcut)
+
+
+# -- Key map for CDP dispatch --
+
+_KEY_MAP = {
+    "b": ("KeyB", "b", 66), "i": ("KeyI", "i", 73),
+    "u": ("KeyU", "u", 85), "a": ("KeyA", "a", 65),
+    "c": ("KeyC", "c", 67), "k": ("KeyK", "k", 75),
+    "v": ("KeyV", "v", 86), "x": ("KeyX", "x", 88),
+    "y": ("KeyY", "y", 89), "z": ("KeyZ", "z", 90),
+    "0": ("Digit0", "0", 48), "1": ("Digit1", "1", 49),
+    "2": ("Digit2", "2", 50), "3": ("Digit3", "3", 51),
+    "4": ("Digit4", "4", 52), "5": ("Digit5", "5", 53),
+    "6": ("Digit6", "6", 54), "7": ("Digit7", "7", 55),
+    "8": ("Digit8", "8", 56), "9": ("Digit9", "9", 57),
+    "Enter": ("Enter", "Enter", 13),
+    "Backspace": ("Backspace", "Backspace", 8),
+    "Tab": ("Tab", "Tab", 9),
+    "Escape": ("Escape", "Escape", 27),
+    "ArrowUp": ("ArrowUp", "ArrowUp", 38),
+    "ArrowDown": ("ArrowDown", "ArrowDown", 40),
+    "ArrowLeft": ("ArrowLeft", "ArrowLeft", 37),
+    "ArrowRight": ("ArrowRight", "ArrowRight", 39),
+    " ": ("Space", " ", 32),
+}
+
+_MODIFIER_MAP = {
+    "control": ("ControlLeft", "Control", 17, 2),
+    "ctrl": ("ControlLeft", "Control", 17, 2),
+    "alt": ("AltLeft", "Alt", 18, 1),
+    "shift": ("ShiftLeft", "Shift", 16, 8),
+    "meta": ("MetaLeft", "Meta", 91, 4),
+    "cmd": ("MetaLeft", "Meta", 91, 4),
+}
