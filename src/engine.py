@@ -3,6 +3,7 @@ import random
 import configparser
 import os
 import json
+import datetime
 from pathlib import Path
 import subprocess
 import sys
@@ -166,6 +167,11 @@ class TypingEngine:
         self.profile_manager = ProfileManager()
         self.profile_manager.load(self.config)
 
+        # Debug logging
+        self._debug = False
+        self._debug_log_path = Path.home() / ".flowstate" / "debug.log"
+        self._debug_buffer = []
+
         self.ui_update_callback = None
         self.status_callback = None
 
@@ -280,6 +286,33 @@ class TypingEngine:
             time.sleep(chunk)
             remaining -= chunk
 
+    def _debug_log(self, msg):
+        """Write a debug message to the log file."""
+        if not self._debug:
+            return
+        ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:12]
+        self._debug_log_path.parent.mkdir(exist_ok=True)
+        with open(self._debug_log_path, "a") as f:
+            f.write(f"{ts} {msg}\n")
+
+    def _debug_char(self, char):
+        """Record a typed character for audit trail."""
+        self._debug_buffer.append(char)
+
+    def _debug_flush_chars(self):
+        """Flush buffered characters to the log."""
+        if self._debug_buffer:
+            batch = "".join(self._debug_buffer)
+            self._debug_log(f"TYPED [{len(batch)} chars]: {repr(batch[:120])}")
+            self._debug_buffer.clear()
+
+    def enable_debug(self, enabled=True):
+        """Enable/disable debug logging. Writes to ~/.flowstate/debug.log"""
+        self._debug = enabled
+        if enabled and hasattr(self, "driver") and hasattr(self.driver, "os_driver"):
+            self.driver.os_driver._debug = True
+        self._debug_log(f"DEBUG MODE: {'ON' if enabled else 'OFF'}")
+
     def trigger_typing(self, window_title=None):
         if self.is_running:
             self.set_state(paused=not self.is_paused)
@@ -289,10 +322,16 @@ class TypingEngine:
         if not clipboard_text:
             return
 
+        original_text = clipboard_text
+        self._debug_log(f"TRIGGER: {len(original_text)} chars")
+        self._debug_log(f"CLIPBOARD: {repr(original_text[:200])}")
+
         clipboard_text = clipboard_text.replace("\r\n", "\n")
         
         # Attach and lock onto the correct tab using the window title
         self.driver.attach(window_title)
+        mode = getattr(self.driver, "_mode", "unknown")
+        self._debug_log(f"MODE: {mode}")
 
         # Apply per-app profile if matched
         active_profile = self.profile_manager.match(window_title)
@@ -342,6 +381,9 @@ class TypingEngine:
         # Completely sever the Playwright connection when typing finishes
         self.driver.detach()
         self.set_state(running=False, paused=False)
+        self._debug_flush_chars()
+        self._debug_log("DETACH: session complete")
+        self._debug_log(f"AUDIT: {len(original_text)} chars in clipboard")
 
         # Restore original settings if a profile was active
         self.profile_manager.restore(self)
@@ -364,6 +406,8 @@ class TypingEngine:
                         shortcut = "Shift+Enter"
                 # Small human-like pause before the shortcut
                 self._sleep(random.randint(60, 130) / 1000.0)
+                self._debug_log(f"KEY: {shortcut}")
+                self._debug_flush_chars()
                 self.driver.send_key(shortcut)
                 # Small pause after the shortcut
                 self._sleep(random.randint(60, 130) / 1000.0)
@@ -909,6 +953,7 @@ class TypingEngine:
             self._caps_run_active = False
             self._caps_run_length = 0
         self.driver.send_char(char, dwell_time / 1000.0)
+        self._debug_char(char)
 
     def _get_neighbor(self, char, map_to_use):
         char = char.lower()
