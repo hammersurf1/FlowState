@@ -292,7 +292,7 @@ class TypingEngine:
             return
         ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:12]
         self._debug_log_path.parent.mkdir(exist_ok=True)
-        with open(self._debug_log_path, "a") as f:
+        with open(self._debug_log_path, "a", encoding="utf-8") as f:
             f.write(f"{ts} {msg}\n")
 
     def _debug_char(self, char):
