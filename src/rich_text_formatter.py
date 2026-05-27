@@ -70,6 +70,10 @@ class RichTextFormatter:
         self._unordered_re = re.compile(r'^(\s*)[-*]\s+(.*)', re.DOTALL)
         self._ordered_re   = re.compile(r'^(\s*)(\d+)\.\s+(.*)', re.DOTALL)
 
+        # Regex for markdown tables
+        self._table_sep_re = re.compile(r'^\|[\s\-:|]+\|\s*$')
+        self._table_row_re = re.compile(r'^\|(.+?)\|\s*$')
+
     # ─── Public API ──────────────────────────────────────────────────────────
 
     def parse(self, text: str) -> List[Action]:
@@ -136,6 +140,51 @@ class RichTextFormatter:
 
                 # Type the list item content with inline formatting
                 actions.extend(self._parse_inline(content))
+
+            elif self._table_row_re.match(raw_line):
+                # ── Table ────────────────────────────────────────────────────
+                if list_state is not None:
+                    actions.append(KeyAction("Enter"))
+                    actions.append(KeyAction("Enter"))
+                    list_state = None
+                # Collect consecutive table rows
+                table_rows = []
+                table_sep_seen = False
+                i = line_idx
+                while i < len(lines):
+                    l = lines[i]
+                    if self._table_sep_re.match(l):
+                        table_sep_seen = True
+                        i += 1
+                        continue
+                    trm = self._table_row_re.match(l)
+                    if not trm:
+                        break
+                    # Strip leading/trailing | and split cells
+                    inner = l.strip().strip("|")
+                    cells = [c.strip() for c in inner.split("|")]
+                    table_rows.append(cells)
+                    i += 1
+                if table_rows:
+                    # Build HTML table
+                    html = '<table style="border-collapse:collapse;width:100%"><tbody>'
+                    for cells in table_rows:
+                        html += "<tr>"
+                        for cell in cells:
+                            html += f"<td style=\"border:1pt solid #000;padding:5pt\">{cell}</td>"
+                        html += "</tr>"
+                    html += "</tbody></table>"
+                    if not is_first_line:
+                        actions.append(KeyAction("\n"))
+                    actions.append(TypeAction(f"<!--TABLE-->{html}"))
+                    actions.append(KeyAction("\n"))
+                    is_first_line = False
+                # Skip consumed lines
+                for _ in range(i - line_idx - 1):
+                    line_idx += 1
+                    if line_idx + 1 < len(lines):
+                        next_line = lines[line_idx + 1]
+                continue
 
             else:
                 # ── Plain / paragraph line ───────────────────────────────────

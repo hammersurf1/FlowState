@@ -377,6 +377,11 @@ class TypingEngine:
             # Restore focus to the page after the OSD countdown finishes
             self.driver.focus_page()
 
+            # Focus the Google Docs editor surface for reliable
+            # keyboard shortcut delivery (once per session)
+            if hasattr(self.driver, 'focus_editor'):
+                self.driver.focus_editor()
+
             layout_name = self.driver.detect_layout()
             self._layout_name = layout_name
             self._finger_map = FINGER_MAPS.get(layout_name, FINGER_MAPS["QWERTY"])
@@ -544,6 +549,7 @@ class TypingEngine:
                     if text == "\n":
                         continue  # skip standalone newline runs
                     self._emit_inline_run(run, actions, mod, prev)
+                _close_formatting()
                 actions.append(KeyAction("\n"))
         
         _close_formatting()

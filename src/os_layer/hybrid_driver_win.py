@@ -161,6 +161,11 @@ class HybridDriver:
         if self._mode == "playwright":
             self.pw_driver.focus_page()
 
+    def focus_editor(self):
+        """Focus the Google Docs editing surface once at session start."""
+        if self._mode == "playwright":
+            self.pw_driver._focus_editor()
+
     def detect_layout(self):
         # Layout detection works the same regardless of mode.
         return self.os_driver.detect_layout()

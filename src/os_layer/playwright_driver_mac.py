@@ -268,7 +268,6 @@ class PlaywrightDriverMac:
     def _dispatch_key(self, chord):
         if not self.page:
             return
-        self._focus_editor()
         cdp = self._get_cdp()
         if cdp is None:
             return

@@ -266,7 +266,6 @@ class PlaywrightDriverWin:
         if not self.page:
             return
 
-        self._focus_editor()
         cdp = self._get_cdp()
         if cdp is None:
             return
