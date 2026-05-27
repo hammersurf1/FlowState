@@ -89,6 +89,18 @@ class HybridDriver:
                 ("remote-debugging-port" in cmdline or
                  self.FLOWSTATE_PROFILE_MARKER in cmdline))
 
+    @staticmethod
+    def _window_title_looks_like_chrome(window_title):
+        if not window_title:
+            return False
+        wt = window_title.lower()
+        return (
+            "google chrome" in wt
+            or "chrome" in wt
+            or "docs.google.com" in wt
+            or "google docs" in wt
+        )
+
     # ── Lifecycle ─────────────────────────────────────────────────
 
     def attach(self, window_title=None):
@@ -106,9 +118,14 @@ class HybridDriver:
                 self.os_driver.start_blocker()
             return
 
-        # Decide mode: must have BOTH the FlowState Chrome in foreground
-        # AND port 9225 accepting connections.
-        if self._is_flowstate_chrome_foreground() and self._is_cdp_reachable():
+        # Prefer Playwright whenever CDP is reachable and either:
+        # 1) foreground process looks like debug Chrome, or
+        # 2) active window title indicates Chrome/Google Docs.
+        # This prevents accidental fallback to OS mode when Docs is active
+        # but foreground process detection is transiently unreliable.
+        cdp_ok = self._is_cdp_reachable()
+        prefer_pw = self._is_flowstate_chrome_foreground() or self._window_title_looks_like_chrome(window_title)
+        if cdp_ok and prefer_pw:
             try:
                 self.pw_driver.attach(window_title)
                 self._mode = "playwright"
@@ -154,6 +171,12 @@ class HybridDriver:
             self.pw_driver.inject_html(html)
         else:
             self.os_driver.inject_html(html)  # no-op
+
+    def paste_html(self, html):
+        if self._mode == "playwright":
+            self.pw_driver.paste_html(html)
+        else:
+            self.os_driver.inject_html(html)  # no-op in OS mode
 
     # ── Shared helpers ────────────────────────────────────────────
 

@@ -159,6 +159,7 @@ class _GDocsHTMLParser(HTMLParser):
         
         # Google Docs wrapper depth
         self._gdocs_wrapper_depth = 0
+        self._span_style_stack: list[dict] = []
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
@@ -214,6 +215,14 @@ class _GDocsHTMLParser(HTMLParser):
         # ── Paragraphs ────────────────────────────────────────────
         if tag == "p":
             self._flush_inline()
+            # Google Docs nests <p> inside <li> and table cells — keep runs
+            # on the parent block instead of spawning a top-level paragraph.
+            if self._current_cell is not None:
+                return
+            if self._current is not None and self._current.kind == "list_item":
+                return
+            if self._current is not None and self._current.kind == "paragraph":
+                self._finish_element()
             self._current = DocElement(kind="paragraph")
             return
 
@@ -255,8 +264,27 @@ class _GDocsHTMLParser(HTMLParser):
                 self._gdocs_wrapper_depth -= 1
                 return
 
-        # ── Headings, paragraphs, list items — close element ─────
-        if tag in self.HEADING_TAGS or tag in ("p", "li"):
+        # ── Headings — close element ─────────────────────────────
+        if tag in self.HEADING_TAGS:
+            self._finish_element()
+            return
+
+        if tag == "p":
+            self._flush_text()
+            if self._current_cell is not None:
+                return
+            if self._current is not None and self._current.kind == "list_item":
+                return
+            if self._current is not None and self._current.kind == "paragraph":
+                # Preserve explicit empty <p></p> blocks as blank lines.
+                if self._has_substantive_runs(self._current):
+                    self._finish_element()
+                else:
+                    self.elements.append(DocElement(kind="blank"))
+                    self._current = None
+            return
+
+        if tag == "li":
             self._finish_element()
             return
 
@@ -322,22 +350,29 @@ class _GDocsHTMLParser(HTMLParser):
     def _push_inline_style(self, style: str):
         """Parse inline style string and push formatting state."""
         self._flush_text()
+        pushed = {"bold": False, "italic": False, "underline": False}
         if "font-weight:700" in style or "font-weight:bold" in style:
             self._bold_depth += 1
+            pushed["bold"] = True
         if "font-style:italic" in style:
             self._italic_depth += 1
+            pushed["italic"] = True
         if "text-decoration:underline" in style:
             self._underline_depth += 1
+            pushed["underline"] = True
+        self._span_style_stack.append(pushed)
 
     def _pop_inline_style(self):
-        """Span closed — the formatting it applied is removed.
-        Since we track depth per-style, we approximate: any span
-        close reduces all depths that were pushed by spans.
-        Google Docs clipboard wraps each formatted run in its own
-        span, so closing a span resets all span-based formatting.
-        """
-        # Simple approach: just flush. Depths percolate via nested spans.
-        pass
+        """Span closed — undo the formatting this span pushed."""
+        if not self._span_style_stack:
+            return
+        pushed = self._span_style_stack.pop()
+        if pushed["bold"] and self._bold_depth > 0:
+            self._bold_depth -= 1
+        if pushed["italic"] and self._italic_depth > 0:
+            self._italic_depth -= 1
+        if pushed["underline"] and self._underline_depth > 0:
+            self._underline_depth -= 1
 
     def _flush_text(self):
         """Emit accumulated text as a StyledRun."""
@@ -362,24 +397,33 @@ class _GDocsHTMLParser(HTMLParser):
         create a paragraph element for them."""
         self._flush_text()
 
+    def _has_substantive_runs(self, el: DocElement) -> bool:
+        """True when an element carries real text (not just whitespace/newlines)."""
+        if el.kind in ("hr", "page_break"):
+            return True
+        return any(r.text.strip() for r in el.runs)
+
     def _finish_element(self):
         """Close the current element and append to elements list."""
         self._flush_text()
         if self._current is not None:
-            # Don't add empty elements
-            if self._current.runs or self._current.kind == "hr":
+            if self._has_substantive_runs(self._current):
                 self.elements.append(self._current)
             self._current = None
         # Also flush any orphan inline runs
         if self._inline_runs and not self._in_table:
             el = DocElement(kind="paragraph", runs=list(self._inline_runs))
-            self.elements.append(el)
+            if self._has_substantive_runs(el):
+                self.elements.append(el)
             self._inline_runs.clear()
 
     def close(self):
         self._finish_element()
-        if self._inline_runs:
-            self.elements.append(DocElement(kind="paragraph", runs=list(self._inline_runs)))
+        if self._inline_runs and not self._in_table:
+            el = DocElement(kind="paragraph", runs=list(self._inline_runs))
+            if self._has_substantive_runs(el):
+                self.elements.append(el)
+            self._inline_runs.clear()
         super().close()
 
 
@@ -391,7 +435,55 @@ def parse_clipboard_html(html: str) -> List[DocElement]:
     html = re.sub(r'<meta[^>]*>', '', html, flags=re.IGNORECASE)
     parser.feed(html)
     parser.close()
-    return parser.elements
+    return _promote_paragraph_lists(parser.elements)
+
+
+def _promote_paragraph_lists(elements: List[DocElement]) -> List[DocElement]:
+    """Promote paragraph text like '1. ...' or '- ...' to semantic list items.
+
+    Google Docs clipboard often contains proper <ol>/<ul>/<li>, but in some
+    cases the list markers are flattened into plain paragraphs. Converting
+    those paragraphs here keeps list semantics in the action layer.
+    """
+    out: List[DocElement] = []
+    for el in elements:
+        if el.kind != "paragraph" or not el.runs:
+            out.append(el)
+            continue
+
+        first = el.runs[0].text
+        if not first:
+            out.append(el)
+            continue
+
+        # Ordered list marker: "1. "
+        m_ol = re.match(r'^(\s*)(\d+)\.\s+', first)
+        if m_ol:
+            promoted = DocElement(kind="list_item", list_type="ol", runs=list(el.runs))
+            promoted.runs[0] = StyledRun(
+                text=first[m_ol.end():],
+                bold=el.runs[0].bold,
+                italic=el.runs[0].italic,
+                underline=el.runs[0].underline,
+            )
+            out.append(promoted)
+            continue
+
+        # Unordered list marker: "- ", "* ", or "• "
+        m_ul = re.match(r'^(\s*)[-*•]\s+', first)
+        if m_ul:
+            promoted = DocElement(kind="list_item", list_type="ul", runs=list(el.runs))
+            promoted.runs[0] = StyledRun(
+                text=first[m_ul.end():],
+                bold=el.runs[0].bold,
+                italic=el.runs[0].italic,
+                underline=el.runs[0].underline,
+            )
+            out.append(promoted)
+            continue
+
+        out.append(el)
+    return out
 
 
 # ── Public API ───────────────────────────────────────────────────────

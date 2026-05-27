@@ -46,7 +46,13 @@ class KeyAction:
     shortcut: str   # e.g. "ctrl+b", "tab", "enter"
 
 
-Action = TypeAction | KeyAction
+@dataclass
+class PasteHtmlAction:
+    """Instruct the engine/driver to paste raw HTML via clipboard paste."""
+    html: str
+
+
+Action = TypeAction | KeyAction | PasteHtmlAction
 
 
 class RichTextFormatter:
@@ -176,7 +182,9 @@ class RichTextFormatter:
                     html += "</tbody></table>"
                     if not is_first_line:
                         actions.append(KeyAction("\n"))
-                    actions.append(TypeAction(f"<!--TABLE-->{html}"))
+                    # Google Docs can parse HTML when it comes via native clipboard paste.
+                    # Using a marker string here would require special-casing in the engine.
+                    actions.append(PasteHtmlAction(html))
                     actions.append(KeyAction("\n"))
                     is_first_line = False
                 # Skip consumed lines

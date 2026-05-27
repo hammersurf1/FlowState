@@ -85,7 +85,9 @@ def execute(driver, instructions: list[Instruction], dwell_time_seconds: float =
             driver.send_formatting_key("Control+Alt+2")
             driver.surgical_paste(instr.content)
             time.sleep(0.05)
-            driver.send_formatting_key("Control+Alt+0")  # back to Normal Text
+            # Don't reset to Normal Text here — Google Docs automatically
+            # reverts to Normal when Enter is pressed after a heading.
+            # Sending Ctrl+Alt+0 would revert the *current* line's heading.
 
         elif isinstance(instr, BulletItem):
             # Google Docs: Ctrl+Shift+8 toggles bullet list
@@ -106,11 +108,17 @@ def execute(driver, instructions: list[Instruction], dwell_time_seconds: float =
         elif isinstance(instr, TableEnd):
             html = _build_table_html(table_rows)
             if html:
-                driver.inject_html(html)
+                if hasattr(driver, 'paste_html'):
+                    driver.paste_html(html)
+                else:
+                    driver.inject_html(html)
                 time.sleep(0.05)
 
         elif isinstance(instr, HorizontalRule):
-            driver.inject_html("<hr>")
+            if hasattr(driver, 'paste_html'):
+                driver.paste_html("<hr>")
+            else:
+                driver.inject_html("<hr>")
             time.sleep(0.03)
 
         elif isinstance(instr, Enter):

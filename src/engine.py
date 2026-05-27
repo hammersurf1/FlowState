@@ -4,11 +4,31 @@ import configparser
 import os
 import json
 import datetime
+import html as html_lib
 from pathlib import Path
 import subprocess
 import sys
 
-from rich_text_formatter import RichTextFormatter, TypeAction, KeyAction, _platform_string
+# #region agent log
+def _agent_debug_log(location: str, message: str, data: dict, hypothesis_id: str, run_id: str = "run1") -> None:
+    try:
+        payload = {
+            "sessionId": "33ea5b",
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        log_path = Path(__file__).resolve().parent.parent / "debug-33ea5b.log"
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+# #endregion
+
+from rich_text_formatter import RichTextFormatter, TypeAction, KeyAction, PasteHtmlAction, _platform_string
 from semantic_analyzer import SemanticAnalyzer
 from typing_planner import TypingPlanner
 try:
@@ -412,7 +432,7 @@ class TypingEngine:
                 # bold/italic/underline left over from previous edits).
                 reset = [KeyAction(f"{self._formatter._mod}+Alt+0")]  # Normal Text
                 actions = reset + actions
-                
+
                 self._execute_actions(actions, neighbor_map)
             else:
                 self._type_plain_text(clipboard_text, neighbor_map)
@@ -436,21 +456,25 @@ class TypingEngine:
         """Execute a pre-parsed list of TypeAction / KeyAction objects."""
         for action in actions:
             self._sleep(0)  # honour pause/stop between actions
-            if isinstance(action, TypeAction):
-                text = action.text
-                # Handle table/HR injection markers
-                if text.startswith("<!--TABLE-->"):
-                    html = text[len("<!--TABLE-->"):]
+            if isinstance(action, PasteHtmlAction):
+                # Google Docs can parse HTML when it's provided through
+                # the native clipboard paste handler.
+                html = action.html
+                # #region agent log
+                _agent_debug_log(
+                    "engine.py:_execute_actions",
+                    "dispatch paste_html action",
+                    {"html_prefix": html[:120], "html_len": len(html)},
+                    "H2",
+                )
+                # #endregion
+                if hasattr(self.driver, 'paste_html'):
+                    self.driver.paste_html(html)
+                else:
                     self.driver.inject_html(html)
-                    continue
-                if text.startswith("<!--HR-->"):
-                    # Google Docs: type '---' + Enter to auto-convert to horizontal rule
-                    self.driver.send_char("-", 0)
-                    self.driver.send_char("-", 0)
-                    self.driver.send_char("-", 0)
-                    self.driver.send_enter()
-                    continue
-                self._type_plain_text(text, neighbor_map)
+                continue
+            if isinstance(action, TypeAction):
+                self._type_plain_text(action.text, neighbor_map)
             elif isinstance(action, KeyAction):
                 shortcut = action.shortcut
                 # Map the engine's newline sentinel to the correct key
@@ -459,6 +483,18 @@ class TypingEngine:
                         shortcut = "Enter"
                     else:
                         shortcut = "Shift+Enter"
+                elif shortcut == "Enter":
+                    # Explicit Enter (from headings/lists) stays as Enter
+                    pass
+                # #region agent log
+                if shortcut in ("Enter", "Shift+Enter", f"{self._formatter._mod}+Alt+0", f"{self._formatter._mod}+Alt+1", f"{self._formatter._mod}+Alt+2"):
+                    _agent_debug_log(
+                        "engine.py:_execute_actions",
+                        "dispatch key action",
+                        {"shortcut": shortcut},
+                        "H1",
+                    )
+                # #endregion
                 # Small human-like pause before the shortcut
                 self._sleep(random.randint(60, 130) / 1000.0)
                 self._debug_log(f"KEY: {shortcut}")
@@ -470,18 +506,43 @@ class TypingEngine:
 
     # ─── Plain-text Typing Loop ──────────────────────────────────────────────
 
+    @staticmethod
+    def _element_has_text(el) -> bool:
+        """True if the element has non-whitespace text runs."""
+        return any(r.text.strip() for r in el.runs)
+
+    @staticmethod
+    def _runs_to_html(runs) -> str:
+        """Convert styled runs to inline HTML for table cell paste."""
+        parts = []
+        for run in runs:
+            if not run.text:
+                continue
+            text = html_lib.escape(run.text)
+            if run.bold:
+                text = f"<strong>{text}</strong>"
+            if run.italic:
+                text = f"<em>{text}</em>"
+            if run.underline:
+                text = f"<u>{text}</u>"
+            parts.append(text)
+        return "".join(parts)
+
     def _elements_to_actions(self, elements):
         """Convert parsed DocElements to TypeAction/KeyAction list.
         
-        Handles headings (Ctrl+Alt+N), tables (inject_html), 
-        horizontal rules (inject_html), and inline formatting
+        Handles headings (Ctrl+Alt+N), tables (paste_html via clipboard),
+        horizontal rules, lists, and inline formatting
         (Ctrl+B/I/U toggles).
         """
         mod = self._formatter._mod
         actions = []
-        prev = {"bold": False, "italic": False, "underline": False, "heading": 0}
+        prev = {"bold": False, "italic": False, "underline": False}
+        in_list = False  # Track list context to avoid toggling on every item
+        current_list_type = ""
         
-        def _close_formatting():
+        def _close_inline():
+            """Close only inline formatting (bold/italic/underline)."""
             if prev["bold"]:
                 actions.append(KeyAction(f"{mod}+b"))
                 prev["bold"] = False
@@ -491,68 +552,142 @@ class TypingEngine:
             if prev["underline"]:
                 actions.append(KeyAction(f"{mod}+u"))
                 prev["underline"] = False
-            if prev["heading"]:
-                actions.append(KeyAction(f"{mod}+Alt+0"))
-                prev["heading"] = 0
+
+        def _exit_list():
+            """Exit list mode by pressing Enter twice (empty bullet → exit)."""
+            nonlocal in_list, current_list_type
+            if in_list:
+                actions.append(KeyAction("Enter"))
+                actions.append(KeyAction("Enter"))
+                in_list = False
+                current_list_type = ""
         
-        for el in elements:
+        for idx, el in enumerate(elements):
+            # Peek at next element to decide list continuation
+            next_el = elements[idx + 1] if idx + 1 < len(elements) else None
+
             if el.kind == "heading":
-                _close_formatting()
+                if not self._element_has_text(el):
+                    continue
+                _close_inline()
+                _exit_list()
                 # Apply heading style
                 level = min(el.level, 6)
                 actions.append(KeyAction(f"{mod}+Alt+{level}"))
-                prev["heading"] = level
                 # Type heading text with inline formatting
                 for run in el.runs:
                     self._emit_inline_run(run, actions, mod, prev)
-                _close_formatting()
-                actions.append(KeyAction("\n"))
+                _close_inline()
+                # #region agent log
+                _agent_debug_log(
+                    "engine.py:_elements_to_actions",
+                    "heading actions created",
+                    {"level": level, "text": "".join(r.text for r in el.runs)[:80], "next_kind": next_el.kind if next_el else None},
+                    "H1",
+                )
+                # #endregion
+                # Enter after heading — Google Docs automatically reverts
+                # to Normal Text on the next line after a heading
+                actions.append(KeyAction("Enter"))
+                # Extra blank line between consecutive headings to prevent
+                # them merging into a single visual block when exported.
+                if next_el is not None and next_el.kind == "heading":
+                    actions.append(KeyAction("Enter"))
                 
             elif el.kind == "table":
-                _close_formatting()
-                # Build table HTML for inject_html
+                _close_inline()
+                _exit_list()
+                # Ensure pasted table does not inherit heading/list paragraph style.
+                actions.append(KeyAction(f"{mod}+Alt+0"))
+                # Build table HTML for clipboard paste (preserve inline formatting)
                 html = '<table style="border-collapse:collapse;width:100%"><tbody>'
                 for row in el.rows:
                     html += "<tr>"
                     for cell in row.cells:
                         tag = "th" if row.is_header else "td"
-                        cell_text = cell.plain_text()
-                        html += f"<{tag} style=\"border:1pt solid #000;padding:5pt\">{cell_text}</{tag}>"
+                        cell_html = self._runs_to_html(cell.runs)
+                        html += f"<{tag} style=\"border:1pt solid #000;padding:5pt\">{cell_html}</{tag}>"
                     html += "</tr>"
                 html += "</tbody></table>"
-                actions.append(TypeAction(f"<!--TABLE-->{html}"))
-                actions.append(KeyAction("\n"))
+                # #region agent log
+                _agent_debug_log(
+                    "engine.py:_elements_to_actions",
+                    "table actions created",
+                    {"rows": len(el.rows), "first_row_cells": len(el.rows[0].cells) if el.rows else 0},
+                    "H2",
+                )
+                # #endregion
+                actions.append(PasteHtmlAction(html))
+                actions.append(KeyAction("Enter"))
                 
             elif el.kind == "hr":
-                _close_formatting()
-                actions.append(TypeAction("<!--HR-->"))
-                actions.append(KeyAction("\n"))
+                _close_inline()
+                _exit_list()
+                actions.append(PasteHtmlAction("<hr>"))
+                actions.append(KeyAction("Enter"))
 
             elif el.kind == "page_break":
-                _close_formatting()
+                _close_inline()
+                _exit_list()
                 # Google Docs: Ctrl+Enter inserts page break
                 actions.append(KeyAction(f"{mod}+Enter"))
-                actions.append(KeyAction("\n"))
+                actions.append(KeyAction("Enter"))
                 
             elif el.kind == "list_item":
-                _close_formatting()
-                # Start with bullet
-                actions.append(KeyAction(f"{mod}+Shift+8"))
+                _close_inline()
+                list_shortcut = f"{mod}+Shift+8"
+                if el.list_type == "ol":
+                    list_shortcut = f"{mod}+Shift+7"
+                # Start list mode or switch list type (ol ↔ ul)
+                if not in_list:
+                    actions.append(KeyAction(list_shortcut))
+                    in_list = True
+                    current_list_type = el.list_type
+                elif el.list_type != current_list_type:
+                    _exit_list()
+                    actions.append(KeyAction(list_shortcut))
+                    in_list = True
+                    current_list_type = el.list_type
                 for run in el.runs:
                     self._emit_inline_run(run, actions, mod, prev)
-                _close_formatting()
-                actions.append(KeyAction("\n"))
+                _close_inline()
+                # If next element is also a list item, Enter continues the list.
+                # Otherwise, exit list mode via `_exit_list()` which emits Enter twice.
+                if next_el is not None and next_el.kind == "list_item":
+                    actions.append(KeyAction("Enter"))
+                else:
+                    _exit_list()
                 
             elif el.kind == "paragraph":
+                if not self._element_has_text(el):
+                    continue
+                _exit_list()
+                para_preview = "".join(r.text for r in el.runs).strip()[:80]
                 for run in el.runs:
                     text = run.text
                     if text == "\n":
                         continue  # skip standalone newline runs
                     self._emit_inline_run(run, actions, mod, prev)
-                _close_formatting()
-                actions.append(KeyAction("\n"))
+                _close_inline()
+                # #region agent log
+                _agent_debug_log(
+                    "engine.py:_elements_to_actions",
+                    "paragraph actions created",
+                    {"preview": para_preview, "next_kind": next_el.kind if next_el else None},
+                    "H3",
+                )
+                # #endregion
+                # Hard Enter between block paragraphs — Shift+Enter merges into
+                # the next list item in Google Docs.
+                actions.append(KeyAction("Enter"))
+            elif el.kind == "blank":
+                _close_inline()
+                _exit_list()
+                # Explicit blank paragraph from source HTML.
+                actions.append(KeyAction("Enter"))
         
-        _close_formatting()
+        _close_inline()
+        _exit_list()
         return actions
     
     def _emit_inline_run(self, run, actions, mod, prev):
@@ -629,18 +764,30 @@ class TypingEngine:
                 mean = mean * directive.delay_multiplier
             mean = max(10, mean)
 
-            # Emit characters in this directive
-            for idx, char in enumerate(directive.text):
+            # Emit characters in this directive (manual index — enumerate cannot skip)
+            text = directive.text
+            idx = 0
+            while idx < len(text):
                 self._sleep(0)
+                char = text[idx]
 
                 # Emoji / surrogate pair fast-path
                 char_code = ord(char)
-                if 0xD800 <= char_code <= 0xDBFF or char_code > 0xFFFF:
+                if 0xD800 <= char_code <= 0xDBFF and idx + 1 < len(text):
+                    self._sleep(random.randint(self.settings["EmojiPauseMs"], self.settings["EmojiPauseMs"] + 500) / 1000.0)
+                    self.driver.surgical_paste(text[idx:idx + 2])
+                    self._sleep(self.settings["UserMeanDelay"] / 1000.0)
+                    self.current_momentum = 0
+                    self._in_number_symbol_run = False
+                    idx += 2
+                    continue
+                if char_code > 0xFFFF:
                     self._sleep(random.randint(self.settings["EmojiPauseMs"], self.settings["EmojiPauseMs"] + 500) / 1000.0)
                     self.driver.surgical_paste(char)
                     self._sleep(self.settings["UserMeanDelay"] / 1000.0)
                     self.current_momentum = 0
                     self._in_number_symbol_run = False
+                    idx += 1
                     continue
 
                 # --- NUMBER / SYMBOL HANDLING ---
@@ -661,11 +808,9 @@ class TypingEngine:
                         and char_code < 128
                         and char not in [" ", "\n", "\t"]
                         and random.randint(1, 100) <= local_typo_chance):
-                    consumed = self._inject_typo(char, directive.text[idx + 1:], neighbor_map)
+                    consumed = self._inject_typo(char, text[idx + 1:], neighbor_map)
                     if consumed:
-                        # Skip consumed chars (retyped inside _inject_typo)
-                        for _skip in range(consumed - 1):
-                            idx += 1
+                        idx += consumed
                         continue
 
                 # Normal keystroke
@@ -677,7 +822,7 @@ class TypingEngine:
 
                 # Delay calculation
                 calc_mean = mean - self.current_momentum
-                next_char = directive.text[idx + 1] if idx + 1 < len(directive.text) else ""
+                next_char = text[idx + 1] if idx + 1 < len(text) else ""
                 bigram = (char + next_char).lower()
                 if bigram in ["th", "he", "in", "er", "an", "re", "on", "at", "en",
                               "nd", "ti", "es", "or", "te", "of", "ed", "is", "it",
@@ -695,6 +840,7 @@ class TypingEngine:
                 delay = self._gaussian(calc_mean, effective_variance)
                 delay = max(10, min(delay, 250))
                 self._sleep(delay / 1000.0)
+                idx += 1
 
             # --- Pause after directive (clause boundaries, etc.) ---
             if self.settings["EnableClausePauses"] and directive.pause_after_ms:
