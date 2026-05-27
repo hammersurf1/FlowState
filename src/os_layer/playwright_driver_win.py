@@ -11,13 +11,120 @@ class PlaywrightDriverWin:
         self.browser = None
         self.context = None
         self.page = None
+        self._cdp = None  # CDP session for raw Input.dispatchKeyEvent
+
+    # ── CDP key dispatch (bypasses Playwright's keyboard API) ────────
+    # page.keyboard.press() does not route key events to Google Docs'
+    # editor iframe correctly in CDP mode.  We use the raw CDP
+    # Input.dispatchKeyEvent method instead, which the browser routes
+    # to whichever element has focus (including cross-origin iframes).
+
+    def _ensure_cdp(self):
+        """Lazily create a CDP session for the active page."""
+        if self._cdp is None and self.page is not None:
+            self._cdp = self.context.new_cdp_session(self.page)
+
+    def _cdp_key(self, code, key, type_, modifiers=0, vk=0):
+        """Dispatch a single key event via CDP."""
+        self._ensure_cdp()
+        if self._cdp:
+            params = {
+                "type": type_,
+                "code": code,
+                "key": key,
+                "modifiers": modifiers,
+                "windowsVirtualKeyCode": vk,
+            }
+            self._cdp.send("Input.dispatchKeyEvent", params)
+
+    def _cdp_press_key(self, combo: str):
+        """Send a key combo like 'Backspace', 'Enter', 'Control+b' via CDP.
+
+        Maps keys to their scan codes and dispatches keyDown/keyUp events.
+        """
+        KEY_MAP = {
+            "backspace": ("Backspace", "Backspace", 8),
+            "enter": ("Enter", "Enter", 13),
+            "tab": ("Tab", "Tab", 9),
+            "shift": ("ShiftLeft", "Shift", 16),
+            "control": ("ControlLeft", "Control", 17),
+            "alt": ("AltLeft", "Alt", 18),
+            "escape": ("Escape", "Escape", 27),
+            "arrowleft": ("ArrowLeft", "ArrowLeft", 37),
+            "arrowright": ("ArrowRight", "ArrowRight", 39),
+            " ": ("Space", " ", 32),
+        }
+
+        parts = [p.strip() for p in combo.lower().split("+")]
+        modifiers = []
+        key_part = parts[-1]
+
+        # Separate modifiers from the main key
+        for p in parts[:-1]:
+            if p in ("control", "ctrl"):
+                modifiers.append("control")
+            elif p == "shift":
+                modifiers.append("shift")
+            elif p == "alt":
+                modifiers.append("alt")
+            elif p == "meta":
+                modifiers.append("control")  # Meta maps to Control on Windows
+
+        # Calculate modifiers bitmask
+        mod_bits = 0
+        if "control" in modifiers:
+            mod_bits |= 2
+        if "shift" in modifiers:
+            mod_bits |= 8
+        if "alt" in modifiers:
+            mod_bits |= 1
+
+        # Press modifiers
+        for mod in modifiers:
+            info = KEY_MAP.get(mod)
+            if info:
+                self._cdp_key(info[0], info[1], "keyDown", mod_bits, info[2])
+                time.sleep(0.005)
+
+        # Determine key info
+        key_lower = key_part.lower()
+        if key_lower in KEY_MAP:
+            code, key_name, vk = KEY_MAP[key_lower]
+        else:
+            # Letter/number/symbol key
+            code = f"Key{key_part.upper()}"
+            key_name = key_part
+            vk = ord(key_part.upper()) if len(key_part) == 1 else 0
+
+        # Recalculate modifiers after modifier keyDowns
+        mod_bits = 0
+        if "control" in modifiers:
+            mod_bits |= 2
+        if "shift" in modifiers:
+            mod_bits |= 8
+        if "alt" in modifiers:
+            mod_bits |= 1
+
+        # Press main key
+        self._cdp_key(code, key_name, "keyDown", mod_bits, vk)
+        time.sleep(0.005)
+
+        # Release main key
+        self._cdp_key(code, key_name, "keyUp", mod_bits, vk)
+
+        # Release modifiers (reverse order)
+        for mod in reversed(modifiers):
+            info = KEY_MAP.get(mod)
+            if info:
+                self._cdp_key(info[0], info[1], "keyUp", 0, info[2])
+                time.sleep(0.005)
+
+    # ── Lifecycle ─────────────────────────────────────────────────
 
     def attach(self, window_title=None):
         if self.browser:
-            # Already attached - just re-acquire the correct page
             self._ensure_active_page(window_title)
             return
-        # Dynamically connect only when typing begins
         print("Attaching to Chrome on port 9225...")
         try:
             self.browser = self.p.chromium.connect_over_cdp('http://localhost:9225')
@@ -37,10 +144,16 @@ class PlaywrightDriverWin:
 
         self.context = self.browser.contexts[0]
         self._ensure_active_page(window_title)
+        self._cdp = None  # reset CDP session for new page
 
     def detach(self):
-        # Sever the connection completely when typing finishes
         print("Detaching from Chrome...")
+        if self._cdp:
+            try:
+                self._cdp.detach()
+            except Exception:
+                pass
+            self._cdp = None
         if self.browser:
             try:
                 self.browser.close()
@@ -56,17 +169,13 @@ class PlaywrightDriverWin:
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
             os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe")
         ]
-
         chrome_exe = None
         for p in paths:
             if os.path.exists(p):
                 chrome_exe = p
                 break
-
         if not chrome_exe:
             return False
-
-        # Check if Chrome is already running
         try:
             result = subprocess.run(
                 ["tasklist", "/FI", "IMAGENAME eq chrome.exe"],
@@ -75,15 +184,9 @@ class PlaywrightDriverWin:
             chrome_was_running = "chrome.exe" in result.stdout.lower()
         except Exception:
             chrome_was_running = False
-
         if chrome_was_running:
             print("Chrome is running. Closing it to reopen with debugging port...")
-            # Graceful shutdown
-            subprocess.run(
-                ["taskkill", "/IM", "chrome.exe"],
-                capture_output=True, timeout=15
-            )
-            # Wait up to 5 seconds for graceful exit
+            subprocess.run(["taskkill", "/IM", "chrome.exe"], capture_output=True, timeout=15)
             for _ in range(10):
                 time.sleep(0.5)
                 result = subprocess.run(
@@ -93,17 +196,9 @@ class PlaywrightDriverWin:
                 if "chrome.exe" not in result.stdout.lower():
                     break
             else:
-                # Force kill
                 print("Force-killing Chrome...")
-                subprocess.run(
-                    ["taskkill", "/F", "/IM", "chrome.exe"],
-                    capture_output=True, timeout=15
-                )
+                subprocess.run(["taskkill", "/F", "/IM", "chrome.exe"], capture_output=True, timeout=15)
                 time.sleep(1)
-
-        # Launch Chrome with the user's real default profile + debugging port.
-        # No --user-data-dir so it uses %LOCALAPPDATA%\Google\Chrome\User Data
-        # --restore-last-session ensures tabs come back after the unclean shutdown.
         subprocess.Popen([
             chrome_exe,
             "--remote-debugging-port=9225",
@@ -120,9 +215,6 @@ class PlaywrightDriverWin:
                     time.sleep(0.1)
             return False
 
-        # STRATEGY 1: Match by window title (most reliable - captured at hotkey press time).
-        # Chrome window title format: "<Page Title> - Google Chrome"
-        # Strip the " - Google Chrome" suffix to get the raw page title.
         if window_title:
             page_title_hint = window_title.replace(" - Google Chrome", "").strip()
             if page_title_hint:
@@ -138,14 +230,12 @@ class PlaywrightDriverWin:
                     except Exception:
                         pass
 
-        # STRATEGY 2: document.hasFocus() - works if CDP connection was fast
         for page in self.context.pages:
             if safe_eval(page, "document.hasFocus()"):
                 self.page = page
                 self.page.bring_to_front()
                 return
 
-        # STRATEGY 3: Visible page with an active text input
         for page in self.context.pages:
             if safe_eval(page, (
                 "document.visibilityState === 'visible' && document.activeElement && "
@@ -157,20 +247,20 @@ class PlaywrightDriverWin:
                 self.page.bring_to_front()
                 return
 
-        # STRATEGY 4: Any visible page
         for page in self.context.pages:
             if safe_eval(page, "document.visibilityState === 'visible'"):
                 self.page = page
                 self.page.bring_to_front()
                 return
 
-        # STRATEGY 5: Last resort - most recently opened tab
         if self.context.pages:
             self.page = self.context.pages[-1]
             self.page.bring_to_front()
 
         if not self.page:
-            raise Exception("No browser tabs found! Playwright cannot type into a closed browser.")
+            raise Exception("No browser tabs found!")
+
+    # ── Page helpers ──────────────────────────────────────────────
 
     def focus_page(self):
         if self.page:
@@ -197,37 +287,53 @@ class PlaywrightDriverWin:
     def get_clipboard(self):
         return pyperclip.paste()
 
+    def is_google_docs(self):
+        try:
+            if self.page:
+                return "docs.google.com/document" in self.page.url
+        except Exception:
+            pass
+        return False
+
+    # ── Text insertion (uses Playwright — works fine) ─────────────
+
     def surgical_paste(self, content):
         if self.page:
             self.page.keyboard.insert_text(content)
 
     def send_char(self, char, dwell_time_seconds):
-        """Atomic text insertion — never drops characters, even at high speed."""
         if self.page:
             self.page.keyboard.insert_text(char)
 
+    # ── Key operations (ALL use CDP now, not Playwright) ──────────
+
     def send_backspace(self):
         if self.page:
-            self.page.keyboard.press("Backspace", delay=10)
+            self._cdp_press_key("Backspace")
 
     def send_shift_enter(self):
         if self.page:
-            self.page.keyboard.press("Shift+Enter", delay=10)
+            self._cdp_press_key("Shift+Enter")
 
     def send_enter(self):
         if self.page:
-            self.page.keyboard.press("Enter", delay=10)
+            self._cdp_press_key("Enter")
 
     def send_tab(self):
         if self.page:
-            self.page.keyboard.press("Tab", delay=10)
+            self._cdp_press_key("Tab")
 
+    def send_key(self, shortcut):
+        """Send a keyboard shortcut via CDP (e.g. 'Control+b')."""
+        if self.page:
+            self._cdp_press_key(shortcut)
+            time.sleep(0.05)
 
     def send_formatting_key(self, key):
-        """Send a formatting keystroke via Playwright (Ctrl+B, Ctrl+I, etc.)."""
+        """Send a formatting keystroke via CDP (Ctrl+B, Ctrl+I, etc.)."""
         if self.page:
-            self.page.keyboard.press(key, delay=10)
-            time.sleep(0.05)  # let Google Docs process the formatting toggle
+            self._cdp_press_key(key)
+            time.sleep(0.05)
 
     def inject_html(self, html):
         """Inject raw HTML at the cursor position (used for tables, HR)."""
@@ -245,21 +351,4 @@ class PlaywrightDriverWin:
                     }}
                 }})()
             ''')
-            time.sleep(0.05)
-
-    def is_google_docs(self):
-        """True if the active page is a Google Docs document."""
-        try:
-            if self.page:
-                return "docs.google.com/document" in self.page.url
-        except Exception:
-            pass
-        return False
-
-    def send_key(self, shortcut):
-        """Send an arbitrary keyboard shortcut via Playwright (e.g. 'Control+b').
-        Adds a small delay after the press so Google Docs can process the event
-        before the next insert_text() call."""
-        if self.page:
-            self.page.keyboard.press(shortcut, delay=10)
             time.sleep(0.05)

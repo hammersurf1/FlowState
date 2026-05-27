@@ -177,6 +177,12 @@ class TypingEngine:
         self._debug_log_path = Path.home() / ".flowstate" / "debug.log"
         self._debug_buffer = []
 
+        # Log clipboard_reader availability
+        if self._debug and not _HAS_CLIPBOARD_HTML:
+            self._debug_log("WARNING: clipboard_reader import failed — no HTML clipboard support")
+        elif self._debug:
+            self._debug_log("clipboard_reader: available")
+
         self.ui_update_callback = None
         self.status_callback = None
 
@@ -317,6 +323,8 @@ class TypingEngine:
         if enabled and hasattr(self, "driver") and hasattr(self.driver, "os_driver"):
             self.driver.os_driver._debug = True
         self._debug_log(f"DEBUG MODE: {'ON' if enabled else 'OFF'}")
+        if enabled:
+            self._debug_log(f"clipboard_reader: {'available' if _HAS_CLIPBOARD_HTML else 'UNAVAILABLE'}")
 
     def trigger_typing(self, window_title=None):
         if self.is_running:
@@ -854,10 +862,11 @@ class TypingEngine:
                         self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
                         self._human_keystroke(next_char)
                         self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
-                        i += 1  # skip next_char since we retyped it
+                        i += 2  # skip both chars since we retyped them
                     else:
                         self._human_keystroke(char)
                         self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+                        i += 1  # advance past retyped char
                     continue
 
                 # --- NORMAL TYPING EXECUTION ---
