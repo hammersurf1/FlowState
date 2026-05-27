@@ -464,6 +464,9 @@ class TypingEngine:
                         and random.randint(1, 100) <= local_typo_chance):
                     consumed = self._inject_typo(char, directive.text[idx + 1:], neighbor_map)
                     if consumed:
+                        # Skip consumed chars (retyped inside _inject_typo)
+                        for _skip in range(consumed - 1):
+                            idx += 1
                         continue
 
                 # Normal keystroke
@@ -553,7 +556,7 @@ class TypingEngine:
             self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
 
     def _inject_typo(self, char, remaining_text, neighbor_map):
-        """Attempt a single-character typo. Returns True if a typo was injected."""
+        """Attempt a single-character typo. Returns chars consumed (0 = no typo)."""
         next_char = remaining_text[0] if remaining_text else ""
         weights = self._get_typo_weights(char, next_char, self.current_momentum, neighbor_map)
         choices = ["spatial", "transposition", "omission", "doubling"]
@@ -611,7 +614,18 @@ class TypingEngine:
 
         self._sleep(random.randint(100, 200) / 1000.0)
         self.current_momentum = 0
-        return True
+
+        # ── RETYPE the correct character(s) after correction ──────
+        if chars_consumed == 2:  # transposition: retype both in correct order
+            self._human_keystroke(char)
+            self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+            self._human_keystroke(next_char)
+            self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+        else:
+            self._human_keystroke(char)
+            self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+
+        return chars_consumed
 
     def _legacy_type_plain_text(self, clipboard_text, neighbor_map):
         """The original character-by-character typing loop with full typo/rhythm
@@ -713,6 +727,17 @@ class TypingEngine:
 
                     self._sleep(random.randint(100, 200) / 1000.0)
                     self.current_momentum = 0
+
+                    # ── RETYPE the correct character(s) after correction ──
+                    if chars_consumed == 2:
+                        self._human_keystroke(char)
+                        self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+                        self._human_keystroke(next_char)
+                        self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+                        i += 1  # skip next_char since we retyped it
+                    else:
+                        self._human_keystroke(char)
+                        self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
                     continue
 
                 # --- NORMAL TYPING EXECUTION ---
