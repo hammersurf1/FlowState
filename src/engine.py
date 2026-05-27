@@ -12,7 +12,7 @@ from rich_text_formatter import RichTextFormatter, TypeAction, KeyAction, _platf
 from semantic_analyzer import SemanticAnalyzer
 from typing_planner import TypingPlanner
 try:
-    from clipboard_reader import get_clipboard_styled_runs, StyledRun
+    from clipboard_reader import get_clipboard_styled_runs
     _HAS_CLIPBOARD_HTML = True
 except ImportError:
     _HAS_CLIPBOARD_HTML = False
@@ -394,8 +394,8 @@ class TypingEngine:
                             self._debug_log(f"HTML PREVIEW: {repr(raw_html[:500])}")
                         runs = get_clipboard_styled_runs()
                         if runs:
-                            self._debug_log(f"HTML: {len(runs)} styled runs from clipboard")
-                            actions = self._styled_runs_to_actions(runs)
+                            self._debug_log(f"HTML: {len(runs)} elements from clipboard")
+                            actions = self._elements_to_actions(runs)
                     except Exception as e:
                         self._debug_log(f"HTML clipboard failed: {e}")
                 
@@ -432,7 +432,16 @@ class TypingEngine:
         for action in actions:
             self._sleep(0)  # honour pause/stop between actions
             if isinstance(action, TypeAction):
-                self._type_plain_text(action.text, neighbor_map)
+                text = action.text
+                # Handle table/HR injection markers
+                if text.startswith("<!--TABLE-->"):
+                    html = text[len("<!--TABLE-->"):]
+                    self.driver.inject_html(html)
+                    continue
+                if text.startswith("<!--HR-->"):
+                    self.driver.inject_html("<hr>")
+                    continue
+                self._type_plain_text(text, neighbor_map)
             elif isinstance(action, KeyAction):
                 shortcut = action.shortcut
                 # Map the engine's newline sentinel to the correct key
@@ -452,62 +461,98 @@ class TypingEngine:
 
     # ─── Plain-text Typing Loop ──────────────────────────────────────────────
 
-    def _styled_runs_to_actions(self, runs):
-        """Convert clipboard HTML styled runs to TypeAction/KeyAction list."""
-        mod = self._formatter._mod  # "Control" or "Meta"
+    def _elements_to_actions(self, elements):
+        """Convert parsed DocElements to TypeAction/KeyAction list.
+        
+        Handles headings (Ctrl+Alt+N), tables (inject_html), 
+        horizontal rules (inject_html), and inline formatting
+        (Ctrl+B/I/U toggles).
+        """
+        mod = self._formatter._mod
         actions = []
         prev = {"bold": False, "italic": False, "underline": False, "heading": 0}
         
-        for run in runs:
-            text = run.text
-            
-            # Handle newlines
-            if text == "\n":
-                actions.append(KeyAction("\n"))
-                prev = {"bold": False, "italic": False, "underline": False, "heading": 0}
-                continue
-            
-            if not text.strip():
-                actions.append(TypeAction(text))
-                continue
-            
-            # Heading change
-            if run.heading_level != prev["heading"]:
-                if prev["heading"]:
-                    # Reset to normal
-                    actions.append(KeyAction(f"{mod}+Alt+0"))
-                if run.heading_level:
-                    actions.append(KeyAction(f"{mod}+Alt+{run.heading_level}"))
-                prev["heading"] = run.heading_level
-            
-            # Bold toggle
-            if run.bold != prev["bold"]:
+        def _close_formatting():
+            if prev["bold"]:
                 actions.append(KeyAction(f"{mod}+b"))
-                prev["bold"] = run.bold
-            
-            # Italic toggle
-            if run.italic != prev["italic"]:
+                prev["bold"] = False
+            if prev["italic"]:
                 actions.append(KeyAction(f"{mod}+i"))
-                prev["italic"] = run.italic
-            
-            # Underline toggle
-            if run.underline != prev["underline"]:
+                prev["italic"] = False
+            if prev["underline"]:
                 actions.append(KeyAction(f"{mod}+u"))
-                prev["underline"] = run.underline
-            
-            actions.append(TypeAction(text))
+                prev["underline"] = False
+            if prev["heading"]:
+                actions.append(KeyAction(f"{mod}+Alt+0"))
+                prev["heading"] = 0
         
-        # Close any open formatting
-        if prev["bold"]:
-            actions.append(KeyAction(f"{mod}+b"))
-        if prev["italic"]:
-            actions.append(KeyAction(f"{mod}+i"))
-        if prev["underline"]:
-            actions.append(KeyAction(f"{mod}+u"))
-        if prev["heading"]:
-            actions.append(KeyAction(f"{mod}+Alt+0"))
+        for el in elements:
+            if el.kind == "heading":
+                _close_formatting()
+                # Apply heading style
+                level = min(el.level, 6)
+                actions.append(KeyAction(f"{mod}+Alt+{level}"))
+                prev["heading"] = level
+                # Type heading text with inline formatting
+                for run in el.runs:
+                    self._emit_inline_run(run, actions, mod, prev)
+                _close_formatting()
+                actions.append(KeyAction("\n"))
+                
+            elif el.kind == "table":
+                _close_formatting()
+                # Build table HTML for inject_html
+                html = '<table style="border-collapse:collapse;width:100%"><tbody>'
+                for row in el.rows:
+                    html += "<tr>"
+                    for cell in row.cells:
+                        tag = "th" if row.is_header else "td"
+                        cell_text = cell.plain_text()
+                        html += f"<{tag} style=\"border:1pt solid #000;padding:5pt\">{cell_text}</{tag}>"
+                    html += "</tr>"
+                html += "</tbody></table>"
+                actions.append(TypeAction(f"<!--TABLE-->{html}"))
+                actions.append(KeyAction("\n"))
+                
+            elif el.kind == "hr":
+                _close_formatting()
+                actions.append(TypeAction("<!--HR--><hr>"))
+                actions.append(KeyAction("\n"))
+                
+            elif el.kind == "list_item":
+                _close_formatting()
+                # Start with bullet
+                actions.append(KeyAction(f"{mod}+Shift+8"))
+                for run in el.runs:
+                    self._emit_inline_run(run, actions, mod, prev)
+                _close_formatting()
+                actions.append(KeyAction("\n"))
+                
+            elif el.kind == "paragraph":
+                for run in el.runs:
+                    text = run.text
+                    if text == "\n":
+                        continue  # skip standalone newline runs
+                    self._emit_inline_run(run, actions, mod, prev)
+                actions.append(KeyAction("\n"))
         
+        _close_formatting()
         return actions
+    
+    def _emit_inline_run(self, run, actions, mod, prev):
+        """Emit formatting toggles + TypeAction for a single StyledRun."""
+        if not run.text:
+            return
+        if run.bold != prev["bold"]:
+            actions.append(KeyAction(f"{mod}+b"))
+            prev["bold"] = run.bold
+        if run.italic != prev["italic"]:
+            actions.append(KeyAction(f"{mod}+i"))
+            prev["italic"] = run.italic
+        if run.underline != prev["underline"]:
+            actions.append(KeyAction(f"{mod}+u"))
+            prev["underline"] = run.underline
+        actions.append(TypeAction(run.text))
 
     def _type_plain_text(self, clipboard_text, neighbor_map):
         """Entry point. Chooses semantic path or legacy path."""
