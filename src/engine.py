@@ -439,7 +439,11 @@ class TypingEngine:
                     self.driver.inject_html(html)
                     continue
                 if text.startswith("<!--HR-->"):
-                    self.driver.inject_html("<hr>")
+                    # Google Docs: type '---' + Enter to auto-convert to horizontal rule
+                    self.driver.send_char("-", 0)
+                    self.driver.send_char("-", 0)
+                    self.driver.send_char("-", 0)
+                    self.driver.send_enter()
                     continue
                 self._type_plain_text(text, neighbor_map)
             elif isinstance(action, KeyAction):
