@@ -27,11 +27,11 @@ from typing import List, Tuple, Optional
 
 # ── Windows Clipboard API ────────────────────────────────────────────
 
-CF_HTML = ctypes.wintypes.UINT(0)
+CF_HTML: int = 0
 
 def _register_html_format():
     global CF_HTML
-    if CF_HTML.value == 0:
+    if CF_HTML == 0:
         user32 = ctypes.windll.user32
         CF_HTML = user32.RegisterClipboardFormatW("HTML Format")
     return CF_HTML
