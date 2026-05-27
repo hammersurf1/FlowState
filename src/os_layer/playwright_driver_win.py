@@ -11,115 +11,29 @@ class PlaywrightDriverWin:
         self.browser = None
         self.context = None
         self.page = None
-        self._cdp = None  # CDP session for raw Input.dispatchKeyEvent
 
-    # ── CDP key dispatch (bypasses Playwright's keyboard API) ────────
-    # page.keyboard.press() does not route key events to Google Docs'
-    # editor iframe correctly in CDP mode.  We use the raw CDP
-    # Input.dispatchKeyEvent method instead, which the browser routes
-    # to whichever element has focus (including cross-origin iframes).
-
-    def _ensure_cdp(self):
-        """Lazily create a CDP session for the active page."""
-        if self._cdp is None and self.page is not None:
-            self._cdp = self.context.new_cdp_session(self.page)
-
-    def _cdp_key(self, code, key, type_, modifiers=0, vk=0):
-        """Dispatch a single key event via CDP."""
-        self._ensure_cdp()
-        if self._cdp:
-            params = {
-                "type": type_,
-                "code": code,
-                "key": key,
-                "modifiers": modifiers,
-                "windowsVirtualKeyCode": vk,
-            }
-            self._cdp.send("Input.dispatchKeyEvent", params)
-
-    def _cdp_press_key(self, combo: str):
-        """Send a key combo like 'Backspace', 'Enter', 'Control+b' via CDP.
-
-        Maps keys to their scan codes and dispatches keyDown/keyUp events.
-        """
-        KEY_MAP = {
-            "backspace": ("Backspace", "Backspace", 8),
-            "enter": ("Enter", "Enter", 13),
-            "tab": ("Tab", "Tab", 9),
-            "shift": ("ShiftLeft", "Shift", 16),
-            "control": ("ControlLeft", "Control", 17),
-            "alt": ("AltLeft", "Alt", 18),
-            "escape": ("Escape", "Escape", 27),
-            "arrowleft": ("ArrowLeft", "ArrowLeft", 37),
-            "arrowright": ("ArrowRight", "ArrowRight", 39),
-            " ": ("Space", " ", 32),
-        }
-
-        parts = [p.strip() for p in combo.lower().split("+")]
-        modifiers = []
-        key_part = parts[-1]
-
-        # Separate modifiers from the main key
-        for p in parts[:-1]:
-            if p in ("control", "ctrl"):
-                modifiers.append("control")
-            elif p == "shift":
-                modifiers.append("shift")
-            elif p == "alt":
-                modifiers.append("alt")
-            elif p == "meta":
-                modifiers.append("control")  # Meta maps to Control on Windows
-
-        # Calculate modifiers bitmask
-        mod_bits = 0
-        if "control" in modifiers:
-            mod_bits |= 2
-        if "shift" in modifiers:
-            mod_bits |= 8
-        if "alt" in modifiers:
-            mod_bits |= 1
-
-        # Press modifiers
-        for mod in modifiers:
-            info = KEY_MAP.get(mod)
-            if info:
-                self._cdp_key(info[0], info[1], "keyDown", mod_bits, info[2])
-                time.sleep(0.005)
-
-        # Determine key info
-        key_lower = key_part.lower()
-        if key_lower in KEY_MAP:
-            code, key_name, vk = KEY_MAP[key_lower]
-        else:
-            # Letter/number/symbol key
-            code = f"Key{key_part.upper()}"
-            key_name = key_part
-            vk = ord(key_part.upper()) if len(key_part) == 1 else 0
-
-        # Recalculate modifiers after modifier keyDowns
-        mod_bits = 0
-        if "control" in modifiers:
-            mod_bits |= 2
-        if "shift" in modifiers:
-            mod_bits |= 8
-        if "alt" in modifiers:
-            mod_bits |= 1
-
-        # Press main key
-        self._cdp_key(code, key_name, "keyDown", mod_bits, vk)
-        time.sleep(0.005)
-
-        # Release main key
-        self._cdp_key(code, key_name, "keyUp", mod_bits, vk)
-
-        # Release modifiers (reverse order)
-        for mod in reversed(modifiers):
-            info = KEY_MAP.get(mod)
-            if info:
-                self._cdp_key(info[0], info[1], "keyUp", 0, info[2])
-                time.sleep(0.005)
-
-    # ── Lifecycle ─────────────────────────────────────────────────
+    def _focus_editor(self):
+        """Click into the Google Docs editor to ensure keyboard focus."""
+        if not self.page:
+            return
+        try:
+            # Click into the editor area — Google Docs has a 
+            # .docs-texteventtarget-iframe that receives keyboard input
+            self.page.evaluate('''
+                (() => {
+                    const iframe = document.querySelector('.docs-texteventtarget-iframe');
+                    if (iframe) {
+                        iframe.focus();
+                        iframe.contentWindow.focus();
+                    }
+                    // Also click the main editing surface
+                    const surface = document.querySelector('.kix-appview-editor');
+                    if (surface) surface.click();
+                })()
+            ''')
+            time.sleep(0.02)
+        except Exception:
+            pass
 
     def attach(self, window_title=None):
         if self.browser:
@@ -144,16 +58,9 @@ class PlaywrightDriverWin:
 
         self.context = self.browser.contexts[0]
         self._ensure_active_page(window_title)
-        self._cdp = None  # reset CDP session for new page
 
     def detach(self):
         print("Detaching from Chrome...")
-        if self._cdp:
-            try:
-                self._cdp.detach()
-            except Exception:
-                pass
-            self._cdp = None
         if self.browser:
             try:
                 self.browser.close()
@@ -260,8 +167,6 @@ class PlaywrightDriverWin:
         if not self.page:
             raise Exception("No browser tabs found!")
 
-    # ── Page helpers ──────────────────────────────────────────────
-
     def focus_page(self):
         if self.page:
             try:
@@ -295,7 +200,7 @@ class PlaywrightDriverWin:
             pass
         return False
 
-    # ── Text insertion (uses Playwright — works fine) ─────────────
+    # ── Text insertion ───────────────────────────────────────────
 
     def surgical_paste(self, content):
         if self.page:
@@ -305,38 +210,43 @@ class PlaywrightDriverWin:
         if self.page:
             self.page.keyboard.insert_text(char)
 
-    # ── Key operations (ALL use CDP now, not Playwright) ──────────
+    # ── Key operations ───────────────────────────────────────────
+    # Focus the editor before every key press to ensure Google Docs
+    # iframe receives keyboard events.
 
     def send_backspace(self):
         if self.page:
-            self._cdp_press_key("Backspace")
+            self._focus_editor()
+            self.page.keyboard.press("Backspace", delay=10)
 
     def send_shift_enter(self):
         if self.page:
-            self._cdp_press_key("Shift+Enter")
+            self._focus_editor()
+            self.page.keyboard.press("Shift+Enter", delay=10)
 
     def send_enter(self):
         if self.page:
-            self._cdp_press_key("Enter")
+            self._focus_editor()
+            self.page.keyboard.press("Enter", delay=10)
 
     def send_tab(self):
         if self.page:
-            self._cdp_press_key("Tab")
+            self._focus_editor()
+            self.page.keyboard.press("Tab", delay=10)
 
     def send_key(self, shortcut):
-        """Send a keyboard shortcut via CDP (e.g. 'Control+b')."""
         if self.page:
-            self._cdp_press_key(shortcut)
+            self._focus_editor()
+            self.page.keyboard.press(shortcut, delay=10)
             time.sleep(0.05)
 
     def send_formatting_key(self, key):
-        """Send a formatting keystroke via CDP (Ctrl+B, Ctrl+I, etc.)."""
         if self.page:
-            self._cdp_press_key(key)
+            self._focus_editor()
+            self.page.keyboard.press(key, delay=10)
             time.sleep(0.05)
 
     def inject_html(self, html):
-        """Inject raw HTML at the cursor position (used for tables, HR)."""
         if self.page:
             escaped = html.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
             self.page.evaluate(f'''
