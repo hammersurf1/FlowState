@@ -359,6 +359,95 @@ class PlaywrightDriverWin:
             ''')
             time.sleep(0.05)
 
+    def paste_html(self, html):
+        """Put HTML on the Windows clipboard and trigger Ctrl+V.
+        
+        Google Docs ignores DOM manipulation but handles clipboard
+        paste events natively, creating proper tables and formatting.
+        """
+        import ctypes
+        import ctypes.wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        user32 = ctypes.windll.user32
+
+        CF_UNICODETEXT = 13
+
+        # Register CF_HTML format
+        cf_html = user32.RegisterClipboardFormatW("HTML Format")
+        if not cf_html:
+            return
+
+        # Build CF_HTML payload with required header
+        html_body = html
+        # Wrap in minimal HTML document for clipboard
+        fragment = f"""<html><body>\n<!--StartFragment-->{html_body}<!--EndFragment-->\n</body></html>"""
+        # CF_HTML header with byte offsets
+        header_template = (
+            "Version:0.9\r\n"
+            "StartHTML:{start_html:010d}\r\n"
+            "EndHTML:{end_html:010d}\r\n"
+            "StartFragment:{start_frag:010d}\r\n"
+            "EndFragment:{end_frag:010d}\r\n"
+        )
+        # Calculate with placeholder lengths
+        dummy_header = header_template.format(
+            start_html=0, end_html=0, start_frag=0, end_frag=0
+        )
+        header_len = len(dummy_header.encode("utf-8"))
+        frag_bytes = fragment.encode("utf-8")
+        start_html = header_len
+        end_html = header_len + len(frag_bytes)
+        start_frag = header_len + frag_bytes.find(b"<!--StartFragment-->") + len(b"<!--StartFragment-->")
+        end_frag = header_len + frag_bytes.find(b"<!--EndFragment-->")
+
+        real_header = header_template.format(
+            start_html=start_html,
+            end_html=end_html,
+            start_frag=start_frag,
+            end_frag=end_frag,
+        )
+        cf_html_bytes = real_header.encode("utf-8") + frag_bytes + b"\x00"
+
+        # Plain text fallback (strip HTML tags for CF_UNICODETEXT)
+        import re as _re
+        plain = _re.sub(r'<[^>]+>', '', html_body)
+        plain_utf16 = plain.encode("utf-16-le") + b"\x00\x00"
+
+        # Set clipboard contents
+        if not user32.OpenClipboard(0):
+            return
+        try:
+            user32.EmptyClipboard()
+
+            # Set CF_HTML
+            h_html = kernel32.GlobalAlloc(0x0002, len(cf_html_bytes))  # GMEM_MOVEABLE
+            if h_html:
+                kernel32.GlobalLock.restype = ctypes.c_void_p
+                p = kernel32.GlobalLock(h_html)
+                if p:
+                    ctypes.memmove(p, cf_html_bytes, len(cf_html_bytes))
+                    kernel32.GlobalUnlock(h_html)
+                    user32.SetClipboardData(cf_html, h_html)
+
+            # Set CF_UNICODETEXT
+            h_text = kernel32.GlobalAlloc(0x0002, len(plain_utf16))
+            if h_text:
+                kernel32.GlobalLock.restype = ctypes.c_void_p
+                p = kernel32.GlobalLock(h_text)
+                if p:
+                    ctypes.memmove(p, plain_utf16, len(plain_utf16))
+                    kernel32.GlobalUnlock(h_text)
+                    user32.SetClipboardData(CF_UNICODETEXT, h_text)
+        finally:
+            user32.CloseClipboard()
+
+        # Trigger native paste via Ctrl+V through CDP
+        self._focus_editor()
+        time.sleep(0.05)
+        self._dispatch_key("Control+v")
+        time.sleep(0.3)  # Give Google Docs time to process the paste
+
 
 # -- Key map for CDP dispatch --
 
