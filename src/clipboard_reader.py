@@ -217,10 +217,14 @@ class _GDocsHTMLParser(HTMLParser):
             self._current = DocElement(kind="paragraph")
             return
 
-        # ── Horizontal rule ───────────────────────────────────────
+        # ── Horizontal rule / page break ──────────────────────────
         if tag == "hr":
             self._finish_element()
-            self.elements.append(DocElement(kind="hr"))
+            style = attrs.get("style", "")
+            if "page-break" in style:
+                self.elements.append(DocElement(kind="page_break"))
+            else:
+                self.elements.append(DocElement(kind="hr"))
             return
 
         # ── Inline formatting via <span style="..."> ──────────────

@@ -520,7 +520,13 @@ class TypingEngine:
                 
             elif el.kind == "hr":
                 _close_formatting()
-                actions.append(TypeAction("<!--HR--><hr>"))
+                actions.append(TypeAction("<!--HR-->"))
+                actions.append(KeyAction("\n"))
+
+            elif el.kind == "page_break":
+                _close_formatting()
+                # Google Docs: Ctrl+Enter inserts page break
+                actions.append(KeyAction(f"{mod}+Enter"))
                 actions.append(KeyAction("\n"))
                 
             elif el.kind == "list_item":
