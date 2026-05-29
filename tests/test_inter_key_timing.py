@@ -5,6 +5,7 @@ import statistics
 from unittest.mock import MagicMock
 
 from engine import TypingEngine
+from iki_timing import sample_inter_key_delay_ms
 
 
 def _engine():
@@ -20,7 +21,7 @@ def _simulate_iki_delays(engine, *, n=4000, mean=115, variance=55):
         calc_mean = mean - engine.current_momentum
         if random.random() < 0.28:
             calc_mean -= 10
-        delays.append(engine._sample_inter_key_delay_ms(calc_mean, variance))
+        delays.append(sample_inter_key_delay_ms(calc_mean, variance))
     return delays
 
 
@@ -77,7 +78,7 @@ def test_chunk_burst_simulated_spread():
         engine._advance_chunk_momentum(char)
         calc_mean = engine._char_typing_mean(directive, mean, idx, 0) - engine.current_momentum
         var = engine._chunk_burst_variance(variance)
-        delays.append(engine._sample_inter_key_delay_ms(calc_mean, var))
+        delays.append(sample_inter_key_delay_ms(calc_mean, var))
 
     cv = statistics.pstdev(delays) / statistics.mean(delays)
     assert cv >= 0.20

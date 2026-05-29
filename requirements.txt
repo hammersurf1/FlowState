@@ -1,4 +1,5 @@
 # Deprecated: use `uv sync` from pyproject.toml instead.
+customtkinter>=5.2.0
 pystray==0.19.5
 Pillow==12.2.0
 keyboard==0.13.5

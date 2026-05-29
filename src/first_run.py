@@ -9,6 +9,7 @@ import os
 import sys
 import shutil
 import platform
+from pathlib import Path
 
 
 def _get_app_dir():
@@ -23,22 +24,24 @@ def _get_app_dir():
 
 def ensure_settings_file():
     """
-    If settings.ini doesn't exist next to the executable, create one
-    from settings.ini.example (bundled by PyInstaller).
+    If ~/.flowstate/settings.ini does not exist, create it from the bundled
+    settings.ini.example (same path TypingEngine uses at runtime).
     """
-    app_dir = _get_app_dir()
-    settings_path = os.path.join(app_dir, "settings.ini")
-    template_path = os.path.join(app_dir, "settings.ini.example")
+    config_dir = Path.home() / ".flowstate"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    settings_path = config_dir / "settings.ini"
 
-    if os.path.exists(settings_path):
-        return  # Already set up
+    if settings_path.exists():
+        return
+
+    app_dir = _get_app_dir()
+    template_path = os.path.join(app_dir, "settings.ini.example")
 
     if os.path.exists(template_path):
         shutil.copy2(template_path, settings_path)
-        print(f"Created settings.ini from template.")
+        print("Created settings.ini from template.")
     else:
-        # Fallback: create a minimal settings.ini
-        with open(settings_path, "w") as f:
+        with open(settings_path, "w", encoding="utf-8") as f:
             f.write("[Settings]\n")
             f.write("usermeandelay = 110\n")
             f.write("uservariance = 45\n")

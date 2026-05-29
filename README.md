@@ -150,6 +150,11 @@ If you prefer to run from source, or you want to inspect exactly what FlowState 
    uv run python scripts/download_models.py
    ```
 
+   **Estimate typing duration** (planner + composition pauses; no typos/revisions):
+   ```sh
+   uv run python scripts/estimate_typing_duration.py --preset essay --file draft.txt
+   ```
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- USAGE EXAMPLES -->

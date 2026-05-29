@@ -10,6 +10,7 @@ import sys
 
 from rich_text_formatter import RichTextFormatter, TypeAction, KeyAction, PasteHtmlAction, _platform_string
 from semantic_analyzer import SemanticAnalyzer
+from iki_timing import sample_inter_key_delay_ms
 from typing_planner import TypingPlanner, CompositionSettings
 try:
     from clipboard_reader import get_clipboard_styled_runs
@@ -837,7 +838,7 @@ class TypingEngine:
             variance = effective_variance
             if directive.chunk_burst:
                 variance = self._chunk_burst_variance(effective_variance)
-            delay = self._sample_inter_key_delay_ms(calc_mean, variance)
+            delay = sample_inter_key_delay_ms(calc_mean, variance)
             self._sleep(delay / 1000.0)
             if directive.chunk_burst and char == " ":
                 self._sleep(random.uniform(25, 110) / 1000.0)
@@ -1193,7 +1194,7 @@ class TypingEngine:
                     if not self._fluent_state:
                         effective_variance = int(effective_variance * 1.7)
 
-                final_delay = self._sample_inter_key_delay_ms(calc_mean, effective_variance)
+                final_delay = sample_inter_key_delay_ms(calc_mean, effective_variance)
                 self._sleep(final_delay / 1000.0)
 
                 i += 1
@@ -1323,19 +1324,6 @@ class TypingEngine:
     @staticmethod
     def _chunk_burst_variance(base_variance):
         return max(10, int(base_variance * random.uniform(0.88, 1.22)))
-
-    def _sample_inter_key_delay_ms(self, calc_mean, variance):
-        """Sample an inter-key interval with enough spread to avoid uniform rhythm detectors."""
-        mean = max(10.0, float(calc_mean))
-        std = max(8.0, float(variance))
-        delay = random.gauss(mean, std)
-        if random.random() < 0.14:
-            delay = max(delay, random.gauss(mean * 1.2, std * 1.35))
-        delay *= random.uniform(0.80, 1.22)
-        if random.random() < 0.03:
-            delay += random.uniform(70, 420)
-        cap = max(380.0, mean * 2.8)
-        return max(8.0, min(delay, cap))
 
     def _gaussian(self, mean, stddev):
         val = int(random.gauss(mean, stddev))

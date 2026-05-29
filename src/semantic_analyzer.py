@@ -211,7 +211,10 @@ class SemanticAnalyzer:
                 paragraph_start=token.i in paragraph_starts,
                 paragraph_end=token.i in paragraph_ends,
                 is_discourse_marker=is_discourse,
-                is_hard_word=rank > _HARD_WORD_RANK,
+                is_hard_word=(
+                    rank > _HARD_WORD_RANK
+                    and SemanticAnalyzer._token_has_content(token)
+                ),
             ))
 
         return metas, doc

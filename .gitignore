@@ -25,5 +25,8 @@ GEMINI.md
 Thumbs.db
 main.py.bak
 
+# Accidental shell redirects / version fragments
+3.8.1
+
 # Debug session artifacts
 debug-*.log

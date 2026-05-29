@@ -1,101 +1,82 @@
 """
-FlowState — Settings GUI (Enhanced)
-A tabbed settings window using tkinter, launchable from the system tray.
-Uses native system theme. Supports press-to-record hotkey capture,
-live typing preview, one-click presets, tooltips, and import/export.
+FlowState — Settings GUI (CustomTkinter)
+Sidebar navigation, scrollable panels, Apply/Save, hotkey capture, and live preview.
 """
 
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import sys
+from __future__ import annotations
+
 import random
 import shutil
+import sys
+import tkinter as tk
+from tkinter import filedialog, messagebox
+
+import customtkinter as ctk
+
+from iki_timing import sample_inter_key_delay_ms
+
+ctk.set_appearance_mode("system")
+ctk.set_default_color_theme("blue")
+
+SECTION_IDS = ("typing", "pauses", "behavior", "hotkeys", "profiles", "preview")
+SECTION_LABELS = {
+    "typing": "Typing",
+    "pauses": "Pauses",
+    "behavior": "Behavior",
+    "hotkeys": "Hotkeys",
+    "profiles": "Profiles",
+    "preview": "Preview",
+}
+
+PROFILE_SLIDER_RANGES = {
+    "UserMeanDelay": (5, 200),
+    "UserVariance": (0, 150),
+    "TypoChance": (0, 30),
+    "TypoDelay": (50, 500),
+    "RevisionChance": (0, 30),
+}
 
 
-# ─── Tooltip Helper ──────────────────────────────────────────────────────
-
-class _Tooltip:
-    """Simple hover tooltip for any widget."""
-
-    def __init__(self, widget, text, delay=400):
-        self.widget = widget
-        self.text = text
-        self.delay = delay
-        self._tip = None
-        self._id = None
-        widget.bind("<Enter>", self._on_enter)
-        widget.bind("<Leave>", self._on_leave)
-        widget.bind("<ButtonPress>", self._on_leave)
-
-    def _on_enter(self, _event=None):
-        self._id = self.widget.after(self.delay, self._show)
-
-    def _on_leave(self, _event=None):
-        if self._id:
-            self.widget.after_cancel(self._id)
-            self._id = None
-        self._hide()
-
-    def _show(self):
-        if self._tip:
-            return
-        x = self.widget.winfo_rootx() + 20
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
-        self._tip = tk.Toplevel(self.widget)
-        self._tip.wm_overrideredirect(True)
-        self._tip.wm_geometry(f"+{x}+{y}")
-        lbl = tk.Label(
-            self._tip, text=self.text, justify="left",
-            background="#ffffe0", foreground="#333333",
-            relief="solid", borderwidth=1,
-            font=("Segoe UI", 9), padx=8, pady=4,
-            wraplength=380
-        )
-        lbl.pack()
-
-    def _hide(self):
-        if self._tip:
-            self._tip.destroy()
-            self._tip = None
-
-
-def add_tooltip(widget, text):
-    """Attach a tooltip to a widget."""
-    _Tooltip(widget, text)
+def _is_timing_setting_key(key: str, value) -> bool:
+    if not isinstance(value, int):
+        return False
+    return "Delay" in key or "Pause" in key or key.endswith("Ms")
 
 
 # ─── Hotkey Recorder ─────────────────────────────────────────────────────
 
-class HotkeyRecorder:
-    """
-    A widget that captures a keyboard shortcut via press-to-record.
-    Click 'Record', press the key combo, it gets captured and displayed.
-    """
 
-    def __init__(self, parent, label_text, initial_value, row):
+class HotkeyRecorder:
+    """Press-to-record hotkey widget for CustomTkinter."""
+
+    def __init__(self, parent, label_text: str, initial_value: str):
         self.value = initial_value
         self._recording = False
-        self._pressed_keys = set()
-        self._combo_parts = []
+        self._pressed_keys: set[str] = set()
+        self._combo_parts: list[str] = []
 
-        frame = ttk.Frame(parent)
-        frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=4)
-        frame.columnconfigure(1, weight=1)
+        self.frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.frame.columnconfigure(1, weight=1)
 
-        ttk.Label(frame, text=label_text).grid(
-            row=0, column=0, sticky="w", padx=(0, 10)
+        ctk.CTkLabel(self.frame, text=label_text, anchor="w").grid(
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 6)
         )
 
         self.display_var = tk.StringVar(value=initial_value)
-        self.display_entry = ttk.Entry(
-            frame, textvariable=self.display_var, state="readonly", width=24
+        self.display_entry = ctk.CTkEntry(
+            self.frame, textvariable=self.display_var, state="readonly", width=280
         )
-        self.display_entry.grid(row=0, column=1, sticky="ew", padx=(0, 8))
+        self.display_entry.grid(row=1, column=0, sticky="ew", padx=(0, 8))
 
-        self.record_btn = ttk.Button(
-            frame, text="Record", width=8, command=self._toggle_recording
+        self.record_btn = ctk.CTkButton(
+            self.frame, text="Record", width=90, command=self._toggle_recording
         )
-        self.record_btn.grid(row=0, column=2)
+        self.record_btn.grid(row=1, column=1)
+
+    def pack(self, **kwargs):
+        kwargs.setdefault("fill", "x")
+        kwargs.setdefault("pady", 8)
+        self.frame.pack(**kwargs)
 
     def _toggle_recording(self):
         if self._recording:
@@ -146,8 +127,6 @@ class HotkeyRecorder:
 
     @staticmethod
     def _normalize_key(event):
-        """Convert a tkinter key event into a human-readable key name
-        compatible with the keyboard (Windows) / pynput (macOS) libraries."""
         modifiers = {
             "Control_L": "ctrl", "Control_R": "ctrl",
             "Alt_L": "alt", "Alt_R": "alt",
@@ -181,33 +160,29 @@ class HotkeyRecorder:
 
 # ─── Typing Preview Engine ───────────────────────────────────────────────
 
-class TypingPreview:
-    """
-    Simulates typing into a tkinter Text widget using the current settings.
-    This is a *visual* preview only — no actual keystrokes are sent.
-    """
 
-    def __init__(self, text_widget, settings, on_done=None):
+class TypingPreview:
+    """Visual typing simulation into a text widget (no real keystrokes)."""
+
+    def __init__(self, text_widget, settings, on_done=None, after_widget=None):
         self.widget = text_widget
         self.settings = settings
         self.on_done = on_done
+        self._after_widget = after_widget or text_widget
         self._after_id = None
         self._cancelled = False
 
     def start(self, text):
-        self.widget.delete("1.0", tk.END)
+        self.widget.configure(state="normal")
+        self.widget.delete("1.0", "end")
         self._cancelled = False
         self._type_char(text, 0)
 
     def stop(self):
         self._cancelled = True
         if self._after_id:
-            self.widget.after_cancel(self._after_id)
+            self._after_widget.after_cancel(self._after_id)
             self._after_id = None
-
-    def _gaussian(self, mean, stddev):
-        val = int(random.gauss(mean, stddev))
-        return max(10, val)
 
     def _type_char(self, text, idx):
         if self._cancelled or idx >= len(text):
@@ -216,53 +191,43 @@ class TypingPreview:
             return
 
         char = text[idx]
-        self.widget.insert(tk.END, char)
-        self.widget.see(tk.END)
+        self.widget.insert("end", char)
+        self.widget.see("end")
 
-        # Calculate delay based on settings
         mean = self.settings.get("UserMeanDelay", 35)
         variance = self.settings.get("UserVariance", 45)
-
-        # Sentence-end pause
         next_char = text[idx + 1] if idx + 1 < len(text) else ""
+
         if char in ".!?" and next_char in " \n":
-            delay = random.randint(
-                self.settings.get("SentencePauseMs", 1200),
-                self.settings.get("SentencePauseMs", 1200) + 400
-            )
-        # Comma/semicolon pause
+            base = self.settings.get("SentencePauseMs", 1200)
+            delay = random.randint(base, base + 400)
         elif char in ",;":
             delay = random.randint(300, 600)
-        # Newline
         elif char == "\n":
-            delay = random.randint(
-                self.settings.get("ParagraphPauseMs", 2000),
-                self.settings.get("ParagraphPauseMs", 2000) + 1000
-            )
+            base = self.settings.get("ParagraphPauseMs", 2000)
+            delay = random.randint(base, base + 1000)
         else:
-            delay = self._gaussian(mean, variance)
-            # Common bigram speedup
+            calc_mean = mean
             bigram = (char + next_char).lower()
-            if bigram in ["th", "he", "in", "er", "an", "re", "on", "at", "en",
-                          "nd", "ti", "es", "or", "te", "of", "ed", "is", "it",
-                          "al", "ar", "st", "to", "nt"]:
-                delay -= 10
-            delay = max(10, min(delay, 250))
+            if bigram in (
+                "th", "he", "in", "er", "an", "re", "on", "at", "en",
+                "nd", "ti", "es", "or", "te", "of", "ed", "is", "it",
+                "al", "ar", "st", "to", "nt",
+            ):
+                calc_mean -= 10
+            delay = int(sample_inter_key_delay_ms(calc_mean, variance))
 
-        self._after_id = self.widget.after(delay, self._type_char, text, idx + 1)
+        self._after_id = self._after_widget.after(delay, self._type_char, text, idx + 1)
 
 
 # ─── Settings Window ─────────────────────────────────────────────────────
 
+
 class SettingsWindow:
-    """
-    Full settings GUI for FlowState. Takes an engine reference and an
-    optional callback for when hotkeys change.
-    """
+    """Full settings GUI for FlowState."""
 
     _instance_open = False
 
-    # One-click presets: name -> {setting_key: value}
     PRESETS = {
         "Fast & Clean": {
             "UserMeanDelay": 15, "UserVariance": 20,
@@ -321,7 +286,7 @@ class SettingsWindow:
             "CompositionSensitivity": 50,
         },
         "Essay Drafting": {
-            "UserMeanDelay": 95, "UserVariance": 55,
+            "UserMeanDelay": 115, "UserVariance": 55,
             "TypoChance": 4, "TypoDelay": 140, "RevisionChance": 8,
             "SentencePauseMs": 1800, "ParagraphPauseMs": 3500,
             "BrainstormFrequency": 60, "EmojiPauseMs": 2200,
@@ -333,8 +298,8 @@ class SettingsWindow:
             "EnableSemanticSpeed": 1, "EnableClausePauses": 1,
             "EnableChunkBurst": 1, "EnableEntityCare": 1,
             "EnableCompositionPauses": 1,
-            "CompositionPauseMinMs": 400, "CompositionPauseMaxMs": 8000,
-            "ParagraphPlanningMinMs": 3000, "ParagraphPlanningMaxMs": 9000,
+            "CompositionPauseMinMs": 1500, "CompositionPauseMaxMs": 22000,
+            "ParagraphPlanningMinMs": 12000, "ParagraphPlanningMaxMs": 45000,
             "CompositionSensitivity": 65,
         },
     }
@@ -347,660 +312,433 @@ class SettingsWindow:
         self.engine = engine
         self.on_hotkey_change = on_hotkey_change
 
-        self.root = tk.Tk()
-        self.root.title("FlowState Settings")
-        self.root.geometry("640x700")
-        self.root.minsize(520, 500)
-        self.root.attributes("-topmost", True)
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.vars: dict[str, tk.Variable] = {}
+        self._value_labels: dict[str, ctk.CTkLabel] = {}
+        self.hotkey_recorders: dict[str, HotkeyRecorder] = {}
+        self._preview_engine = None
+        self._panels: dict[str, ctk.CTkScrollableFrame] = {}
+        self._nav_buttons: dict[str, ctk.CTkButton] = {}
+        self._active_section = "typing"
+        self._snapshot_settings: dict = {}
+        self._snapshot_hotkeys: dict = {}
+        self._apply_status_after: str | None = None
 
-        # Keyboard shortcuts
-        self.root.bind("<Control-s>", lambda _e: self._save())
+        self.root = ctk.CTk()
+        self.root.title("FlowState Settings")
+        self.root.geometry("900x720")
+        self.root.minsize(640, 520)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.bind("<Control-s>", lambda _e: self._save(close=True))
         self.root.bind("<Escape>", lambda _e: self._on_close())
 
-        # Native theme
-        style = ttk.Style()
-        if sys.platform == "win32":
-            try:
-                style.theme_use("vista")
-            except tk.TclError:
-                style.theme_use("clam")
-        elif sys.platform == "darwin":
-            try:
-                style.theme_use("aqua")
-            except tk.TclError:
-                style.theme_use("clam")
-        else:
-            style.theme_use("clam")
+        self._build_top_bar()
+        self._build_main_area()
+        self._build_footer()
 
-        style.configure("Header.TLabel", font=("Segoe UI", 10, "bold"))
-        style.configure("Title.TLabel", font=("Segoe UI", 11, "bold"))
-        style.configure("Value.TLabel", font=("Segoe UI", 9, "bold"), foreground="#0066cc")
-        style.configure("Desc.TLabel", font=("Segoe UI", 8), foreground="#666666")
-        style.configure("Status.TLabel", font=("Segoe UI", 9), foreground="#006600")
-
-        self.vars = {}
-        self.hotkey_recorders = {}
-        self._preview_engine = None
-
-        # ── Top bar: Presets + Status ──
-        top_bar = ttk.Frame(self.root, padding=(12, 8))
-        top_bar.pack(fill="x")
-        top_bar.columnconfigure(1, weight=1)
-
-        ttk.Label(top_bar, text="Preset:", style="Header.TLabel").grid(row=0, column=0, sticky="w")
-        self._preset_var = tk.StringVar(value="Custom")
-        preset_combo = ttk.Combobox(
-            top_bar, textvariable=self._preset_var,
-            values=["Custom"] + list(self.PRESETS.keys()),
-            state="readonly", width=20
-        )
-        preset_combo.grid(row=0, column=1, sticky="w", padx=(6, 0))
-        preset_combo.bind("<<ComboboxSelected>>", self._on_preset_change)
-        add_tooltip(preset_combo, "Apply a one-click preset configuration.\n"
-                    "This updates all sliders and toggles to match the preset.")
-
-        # Active profile indicator
-        self._status_var = tk.StringVar(value="")
-        self._status_lbl = ttk.Label(top_bar, textvariable=self._status_var, style="Status.TLabel")
-        self._status_lbl.grid(row=0, column=2, sticky="e")
-        self._update_status()
-
-        # ── Notebook (Tabs) ──
-        notebook = ttk.Notebook(self.root)
-        notebook.pack(fill="both", expand=True, padx=12, pady=(0, 0))
-
-        tab_typing = ttk.Frame(notebook, padding=16)
-        notebook.add(tab_typing, text="  Typing  ")
-        self._build_typing_tab(tab_typing)
-
-        tab_behavior = ttk.Frame(notebook, padding=16)
-        notebook.add(tab_behavior, text="  Behavior  ")
-        self._build_behavior_tab(tab_behavior)
-
-        tab_hotkeys = ttk.Frame(notebook, padding=16)
-        notebook.add(tab_hotkeys, text="  Hotkeys  ")
-        self._build_hotkeys_tab(tab_hotkeys)
-
-        tab_profiles = ttk.Frame(notebook, padding=16)
-        notebook.add(tab_profiles, text="  Profiles  ")
-        self._build_profiles_tab(tab_profiles)
-
-        tab_preview = ttk.Frame(notebook, padding=16)
-        notebook.add(tab_preview, text="  Preview  ")
-        self._build_preview_tab(tab_preview)
-
-        # ── Footer Buttons ──
-        btn_frame = ttk.Frame(self.root, padding=(12, 10))
-        btn_frame.pack(side="bottom", fill="x")
-
-        ttk.Button(
-            btn_frame, text="Import...", command=self._import_settings
-        ).pack(side="left", padx=(0, 4))
-        ttk.Button(
-            btn_frame, text="Export...", command=self._export_settings
-        ).pack(side="left")
-
-        ttk.Button(
-            btn_frame, text="Reset to Defaults", command=self._reset_defaults
-        ).pack(side="left", padx=(16, 0))
-
-        ttk.Button(btn_frame, text="Save  (Ctrl+S)", command=self._save).pack(
-            side="right", padx=(8, 0)
-        )
-        ttk.Button(btn_frame, text="Cancel  (Esc)", command=self._on_close).pack(
-            side="right"
-        )
+        self._show_section("typing")
+        self._take_snapshot()
+        self._update_dirty_state()
 
         self.root.mainloop()
 
-    # ─── Tab Builders ──────────────────────────────────────────────
+    # ─── Layout ────────────────────────────────────────────────────
 
-    def _build_typing_tab(self, parent):
+    def _build_top_bar(self):
+        top = ctk.CTkFrame(self.root, fg_color="transparent")
+        top.pack(fill="x", padx=16, pady=(14, 8))
+        top.columnconfigure(2, weight=1)
+
+        ctk.CTkLabel(top, text="Preset", font=ctk.CTkFont(weight="bold")).grid(
+            row=0, column=0, sticky="w"
+        )
+        self._preset_var = tk.StringVar(value="Custom")
+        preset_menu = ctk.CTkOptionMenu(
+            top,
+            variable=self._preset_var,
+            values=["Custom"] + list(self.PRESETS.keys()),
+            command=self._on_preset_change,
+            width=200,
+        )
+        preset_menu.grid(row=0, column=1, sticky="w", padx=(8, 0))
+
+        self._status_var = tk.StringVar(value="")
+        ctk.CTkLabel(top, textvariable=self._status_var, text_color="#2fa572").grid(
+            row=0, column=2, sticky="e"
+        )
+        self._apply_feedback_var = tk.StringVar(value="")
+        ctk.CTkLabel(top, textvariable=self._apply_feedback_var, text_color="#888888").grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(4, 0)
+        )
+        self._update_status()
+
+        self._stay_on_top_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            top,
+            text="Stay on top",
+            variable=self._stay_on_top_var,
+            command=self._toggle_stay_on_top,
+            width=120,
+        ).grid(row=0, column=3, padx=(12, 0))
+
+    def _build_main_area(self):
+        body = ctk.CTkFrame(self.root, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        sidebar = ctk.CTkFrame(body, width=180, corner_radius=8)
+        sidebar.grid(row=0, column=0, sticky="ns", padx=(0, 10))
+        sidebar.grid_propagate(False)
+
+        for sid in SECTION_IDS:
+            btn = ctk.CTkButton(
+                sidebar,
+                text=SECTION_LABELS[sid],
+                anchor="w",
+                fg_color="transparent",
+                text_color=("gray10", "gray90"),
+                hover_color=("gray75", "gray25"),
+                command=lambda s=sid: self._show_section(s),
+            )
+            btn.pack(fill="x", padx=8, pady=4)
+            self._nav_buttons[sid] = btn
+
+        content_host = ctk.CTkFrame(body, fg_color="transparent")
+        content_host.grid(row=0, column=1, sticky="nsew")
+        content_host.rowconfigure(0, weight=1)
+        content_host.columnconfigure(0, weight=1)
+
+        for sid in SECTION_IDS:
+            panel = ctk.CTkScrollableFrame(content_host, label_text=SECTION_LABELS[sid])
+            panel.grid(row=0, column=0, sticky="nsew")
+            self._panels[sid] = panel
+            builder = getattr(self, f"_build_{sid}_section")
+            builder(panel)
+
+    def _build_footer(self):
+        footer = ctk.CTkFrame(self.root, fg_color="transparent")
+        footer.pack(side="bottom", fill="x", padx=16, pady=(0, 14))
+
+        left = ctk.CTkFrame(footer, fg_color="transparent")
+        left.pack(side="left")
+        ctk.CTkButton(left, text="Import…", width=90, command=self._import_settings).pack(
+            side="left", padx=(0, 6)
+        )
+        ctk.CTkButton(left, text="Export…", width=90, command=self._export_settings).pack(
+            side="left", padx=(0, 6)
+        )
+        ctk.CTkButton(
+            left, text="Reset to Defaults", width=140, command=self._reset_defaults,
+            fg_color="transparent", border_width=1,
+        ).pack(side="left", padx=(12, 0))
+
+        right = ctk.CTkFrame(footer, fg_color="transparent")
+        right.pack(side="right")
+        self._cancel_btn = ctk.CTkButton(
+            right, text="Cancel  (Esc)", width=110, command=self._on_close,
+            fg_color="transparent", border_width=1,
+        )
+        self._cancel_btn.pack(side="right", padx=(6, 0))
+        self._save_btn = ctk.CTkButton(
+            right, text="Save & Close  (Ctrl+S)", width=160, command=lambda: self._save(close=True)
+        )
+        self._save_btn.pack(side="right", padx=(6, 0))
+        self._apply_btn = ctk.CTkButton(
+            right, text="Apply", width=90, command=lambda: self._apply(close=False)
+        )
+        self._apply_btn.pack(side="right", padx=(6, 0))
+
+    def _show_section(self, section_id: str):
+        self._active_section = section_id
+        for sid, panel in self._panels.items():
+            if sid == section_id:
+                panel.grid()
+            else:
+                panel.grid_remove()
+        for sid, btn in self._nav_buttons.items():
+            if sid == section_id:
+                btn.configure(fg_color=("gray75", "gray30"))
+            else:
+                btn.configure(fg_color="transparent")
+
+    def _toggle_stay_on_top(self):
+        self.root.attributes("-topmost", self._stay_on_top_var.get())
+
+    # ─── Section builders ──────────────────────────────────────────
+
+    def _build_typing_section(self, parent):
         self._add_section(parent, "Typing Speed & Variance")
         self._add_slider(
             parent, "UserMeanDelay", "Typing Speed (Lower = Faster)",
-            5, 200, "Average delay in ms between keystrokes.\n"
-                    "Humans average 30–60 ms; bots often sit at 0–10 ms."
+            5, 200,
+            "Average delay in ms between keystrokes.",
         )
         self._add_slider(
             parent, "UserVariance", "Variance (Randomness)",
-            0, 150, "Standard deviation of keystroke timing.\n"
-                    "Higher = more erratic, human-like rhythm."
+            0, 150, "Standard deviation of keystroke timing.",
         )
-
         self._add_section(parent, "Errors & Corrections")
-        self._add_slider(
-            parent, "TypoChance", "Typo Chance (%)",
-            0, 30, "Probability of a spatial/transposition typo per keystroke."
-        )
-        self._add_slider(
-            parent, "TypoDelay", "Correction Speed (ms)",
-            50, 500, "Pause before correcting a typo with backspace."
-        )
-        self._add_slider(
-            parent, "RevisionChance", "Word Revision Chance (%)",
-            0, 30, "Probability of mistyping a common word, then correcting it."
-        )
+        self._add_slider(parent, "TypoChance", "Typo Chance (%)", 0, 30, "")
+        self._add_slider(parent, "TypoDelay", "Correction Speed (ms)", 50, 500, "")
+        self._add_slider(parent, "RevisionChance", "Word Revision Chance (%)", 0, 30, "")
 
-    def _build_behavior_tab(self, parent):
+    def _build_pauses_section(self, parent):
         self._add_section(parent, "Human-like Pauses")
-        self._add_slider(
-            parent, "SentencePauseMs", "Sentence Pause (ms)",
-            200, 4000, "Pause after sentence-ending punctuation (. ? !)"
-        )
-        self._add_slider(
-            parent, "ParagraphPauseMs", "Paragraph Pause (ms)",
-            500, 6000, "Pause at line breaks / new paragraphs"
-        )
-        self._add_slider(
-            parent, "EmojiPauseMs", "Emoji / Symbol Pause (ms)",
-            200, 4000, "Pause before pasting emoji or special characters"
-        )
-        self._add_slider(
-            parent, "BrainstormFrequency", "Random Pause Frequency",
-            10, 200, "Average words between random 'thinking' pauses"
-        )
-        self._add_slider(
-            parent, "CompositionPauseMinMs", "Composition Pause Min (ms)",
-            0, 2000, "Minimum content-aware hesitation before a word or phrase"
-        )
-        self._add_slider(
-            parent, "CompositionPauseMaxMs", "Composition Pause Max (ms)",
-            1000, 10000, "Maximum pre-typing composition pause"
-        )
-        self._add_slider(
-            parent, "ParagraphPlanningMinMs", "Paragraph Planning Min (ms)",
-            500, 6000, "Minimum pause before starting a new paragraph"
-        )
-        self._add_slider(
-            parent, "ParagraphPlanningMaxMs", "Paragraph Planning Max (ms)",
-            2000, 15000, "Maximum pause before starting a new paragraph"
-        )
-        self._add_slider(
-            parent, "CompositionSensitivity", "Composition Sensitivity",
-            0, 100, "Scale for content-aware pauses (50 = normal)"
-        )
+        self._add_slider(parent, "SentencePauseMs", "Sentence Pause (ms)", 200, 4000, "")
+        self._add_slider(parent, "ParagraphPauseMs", "Paragraph Pause (ms)", 500, 6000, "")
+        self._add_slider(parent, "EmojiPauseMs", "Emoji / Symbol Pause (ms)", 200, 4000, "")
+        self._add_slider(parent, "BrainstormFrequency", "Random Pause Frequency", 10, 200, "")
+        self._add_section(parent, "Composition Pauses")
+        self._add_slider(parent, "CompositionPauseMinMs", "Composition Pause Min (ms)", 0, 5000, "")
+        self._add_slider(parent, "CompositionPauseMaxMs", "Composition Pause Max (ms)", 5000, 30000, "")
+        self._add_slider(parent, "ParagraphPlanningMinMs", "Paragraph Planning Min (ms)", 2000, 30000, "")
+        self._add_slider(parent, "ParagraphPlanningMaxMs", "Paragraph Planning Max (ms)", 5000, 60000, "")
+        self._add_slider(parent, "CompositionSensitivity", "Composition Sensitivity", 0, 100, "")
 
-        self._add_section(parent, "Behavior Toggles")
-        self._add_checkbox(
-            parent, "EnableTypos",
-            "Enable typos (spatial, transposition, omission, doubling)"
-        )
-        self._add_checkbox(
-            parent, "EnableRevisions",
-            "Enable word-level revisions (legacy — use Smart Revisions below)"
-        )
-        self._add_checkbox(
-            parent, "EnableBrainstormPauses",
-            "Enable random 'brainstorm' pauses"
-        )
+    def _build_behavior_section(self, parent):
+        self._add_section(parent, "Core Behavior")
+        self._add_checkbox(parent, "EnableTypos", "Enable typos (spatial, transposition, omission, doubling)")
+        self._add_checkbox(parent, "EnableRevisions", "Enable word-level revisions (legacy)")
+        self._add_checkbox(parent, "EnableBrainstormPauses", "Enable random brainstorm pauses")
         self._add_checkbox(
             parent, "EnableCompositionPauses",
-            "Composition pauses — content-aware drafting hesitation (replaces random brainstorm)"
+            "Composition pauses — content-aware drafting hesitation",
         )
-        self._add_checkbox(
-            parent, "UseEnterOnly",
-            "Use plain Enter instead of Shift+Enter for new lines"
-        )
-        self._add_checkbox(
-            parent, "EnableRichText",
-            "Enable rich-text formatting (bold, italic, lists, headings, etc.)"
-        )
+        self._add_checkbox(parent, "UseEnterOnly", "Use plain Enter instead of Shift+Enter for new lines")
+        self._add_checkbox(parent, "EnableRichText", "Enable rich-text formatting (bold, italic, lists, headings)")
 
         self._add_section(parent, "Semantic Humanization")
-        self._add_checkbox(
-            parent, "EnableSmartRevisions",
-            "Smart revisions — type a WordNet synonym, backspace, then correct"
-        )
-        self._add_checkbox(
-            parent, "EnableSemanticSpeed",
-            "Semantic speed — rare words slower, common words faster"
-        )
-        self._add_checkbox(
-            parent, "EnableEntityCare",
-            "Entity care — fewer typos on named entities (people, places, orgs)"
-        )
-        self._add_checkbox(
-            parent, "EnableClausePauses",
-            "Clause pauses — micro-pauses at subordinate clause boundaries"
-        )
-        self._add_checkbox(
-            parent, "EnableChunkBurst",
-            "Chunk burst — type noun phrases as single cognitive bursts"
-        )
-        self._add_checkbox(
-            parent, "EnableFrequencyTypos",
-            "Frequency-based typos — common words have fewer typos"
-        )
-        self._add_checkbox(
-            parent, "EnableDeferredCorrections",
-            "Deferred corrections — finish word before backspacing a typo"
-        )
+        self._add_checkbox(parent, "EnableSmartRevisions", "Smart revisions — synonym then correct")
+        self._add_checkbox(parent, "EnableSemanticSpeed", "Semantic speed — rare words slower")
+        self._add_checkbox(parent, "EnableEntityCare", "Entity care — fewer typos on named entities")
+        self._add_checkbox(parent, "EnableClausePauses", "Clause pauses at subordinate boundaries")
+        self._add_checkbox(parent, "EnableChunkBurst", "Chunk burst — noun phrases as cognitive bursts")
+        self._add_checkbox(parent, "EnableFrequencyTypos", "Frequency-based typos")
+        self._add_checkbox(parent, "EnableDeferredCorrections", "Deferred corrections — finish word before backspace")
 
         self._add_section(parent, "Motor Realism")
-        self._add_checkbox(
-            parent, "EnableFingerPenalty",
-            "Same-finger penalty — slower when same finger types two chars"
-        )
-        self._add_checkbox(
-            parent, "EnableFluencyStates",
-            "Fluency states — alternate between fluent and disfluent periods"
-        )
-        self._add_checkbox(
-            parent, "EnableNumberSymbolCare",
-            "Number / symbol care — slower, fewer typos on digits and symbols"
-        )
-        self._add_checkbox(
-            parent, "EnableCapsRunRealism",
-            "Caps Lock realism — delay on first capital only in a run"
-        )
+        self._add_checkbox(parent, "EnableFingerPenalty", "Same-finger penalty")
+        self._add_checkbox(parent, "EnableFluencyStates", "Fluency states — fluent / disfluent periods")
+        self._add_checkbox(parent, "EnableNumberSymbolCare", "Number / symbol care")
+        self._add_checkbox(parent, "EnableCapsRunRealism", "Caps Lock realism — delay on first capital in run")
 
-    def _build_profiles_tab(self, parent):
-        """Build the per-app profiles configuration tab."""
-        self._add_section(parent, "App Profiles")
+    def _build_hotkeys_section(self, parent):
+        is_mac = sys.platform == "darwin"
+        trigger_desc = "Cmd+Option+V" if is_mac else "Ctrl+Alt+V"
+        ctk.CTkLabel(
+            parent,
+            text="Click Record, then press your key combination. Release to finish.",
+            text_color="gray60",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 12))
 
-        desc = ttk.Label(parent, text=(
-            "Profiles override typing settings for specific applications.\n"
-            "Match by substring in the active window title (case-insensitive)."
-        ), style="Desc.TLabel", wraplength=560, justify="left")
-        desc.pack(anchor="w", pady=(0, 12))
+        self.hotkey_recorders["TriggerHotkey"] = HotkeyRecorder(
+            parent,
+            f"Trigger Typing (default: {trigger_desc})",
+            self.engine.hotkeys.get("TriggerHotkey", "ctrl+alt+v"),
+        )
+        self.hotkey_recorders["TriggerHotkey"].pack()
 
-        # Listbox of existing profiles
-        list_frame = ttk.Frame(parent)
-        list_frame.pack(fill="x", pady=6)
+        self.hotkey_recorders["PauseKey"] = HotkeyRecorder(
+            parent,
+            "Pause / Abort (default: Esc)",
+            self.engine.hotkeys.get("PauseKey", "esc"),
+        )
+        self.hotkey_recorders["PauseKey"].pack()
 
-        self._profile_listbox = tk.Listbox(list_frame, height=5)
-        self._profile_listbox.pack(side="left", fill="both", expand=True)
+        ctk.CTkLabel(
+            parent,
+            text="Hotkey changes take effect when you Apply or Save.",
+            text_color="gray60",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", pady=(16, 0))
+
+    def _build_profiles_section(self, parent):
+        ctk.CTkLabel(
+            parent,
+            text="Profiles override typing settings per application (window title substring match).",
+            text_color="gray60",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 12))
+
+        list_row = ctk.CTkFrame(parent, fg_color="transparent")
+        list_row.pack(fill="x", pady=6)
+        list_row.columnconfigure(0, weight=1)
+
+        list_container = ctk.CTkFrame(list_row)
+        list_container.grid(row=0, column=0, sticky="nsew")
+        self._profile_listbox = tk.Listbox(
+            list_container, height=6, exportselection=False,
+            font=("Segoe UI", 11), relief="flat", borderwidth=0,
+        )
+        self._profile_listbox.pack(fill="both", expand=True, padx=4, pady=4)
         self._profile_listbox.bind("<<ListboxSelect>>", self._on_profile_select)
 
-        btn_frame = ttk.Frame(list_frame)
-        btn_frame.pack(side="right", padx=(8, 0))
+        btn_col = ctk.CTkFrame(list_row, fg_color="transparent")
+        btn_col.grid(row=0, column=1, padx=(8, 0))
+        ctk.CTkButton(btn_col, text="Add", width=80, command=self._add_profile).pack(pady=3)
+        ctk.CTkButton(btn_col, text="Delete", width=80, command=self._delete_profile).pack(pady=3)
 
-        ttk.Button(btn_frame, text="Add", command=self._add_profile, width=7).pack(pady=2)
-        ttk.Button(btn_frame, text="Delete", command=self._delete_profile, width=7).pack(pady=2)
-
-        # Profile editor fields
-        self._prof_vars = {}
+        self._prof_vars: dict[str, tk.IntVar] = {}
         self._prof_pattern_var = tk.StringVar()
+        ctk.CTkLabel(parent, text="Window pattern (substring)", anchor="w").pack(
+            anchor="w", pady=(12, 4)
+        )
+        ctk.CTkEntry(parent, textvariable=self._prof_pattern_var).pack(fill="x", pady=(0, 8))
 
-        ttk.Label(parent, text="Window Pattern (substring):").pack(anchor="w", pady=(12, 2))
-        ttk.Entry(parent, textvariable=self._prof_pattern_var, width=50).pack(fill="x")
-
-        prof_fields = [
+        for key, label in (
             ("UserMeanDelay", "Typing Speed"),
             ("UserVariance", "Variance"),
             ("TypoChance", "Typo Chance (%)"),
             ("TypoDelay", "Correction Speed (ms)"),
             ("RevisionChance", "Revision Chance (%)"),
-        ]
-        for key, label in prof_fields:
-            f = ttk.Frame(parent)
-            f.pack(fill="x", pady=2)
-            ttk.Label(f, text=label, width=22).pack(side="left")
-            self._prof_vars[key] = tk.IntVar(value=self.engine.settings.get(key, 0))
-            s = ttk.Scale(f, from_={"UserMeanDelay": (5, 200), "UserVariance": (0, 150),
-                                     "TypoChance": (0, 30), "TypoDelay": (50, 500),
-                                     "RevisionChance": (0, 30)}[key][0],
-                          to={"UserMeanDelay": (5, 200), "UserVariance": (0, 150),
-                              "TypoChance": (0, 30), "TypoDelay": (50, 500),
-                              "RevisionChance": (0, 30)}[key][1],
-                          variable=self._prof_vars[key])
-            s.pack(side="left", fill="x", expand=True)
+        ):
+            lo, hi = PROFILE_SLIDER_RANGES[key]
+            self._add_slider(parent, key, label, lo, hi, "", prof=True)
 
-        ttk.Button(parent, text="Save Profile", command=self._save_profile).pack(pady=12)
-
-        # Populate listbox
+        ctk.CTkButton(parent, text="Save Profile", command=self._save_profile).pack(pady=16)
         self._refresh_profile_listbox()
 
-    def _build_preview_tab(self, parent):
-        """Build the live typing preview tab."""
-        self._add_section(parent, "Live Typing Preview")
+    def _build_preview_section(self, parent):
+        ctk.CTkLabel(
+            parent,
+            text="Simulate typing with current slider/checkbox values (including unsaved changes).",
+            text_color="gray60",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 12))
 
-        desc = ttk.Label(parent, text=(
-            "Paste text below and click Preview to see how your current settings\n"
-            "will feel. This is a visual simulation — no real keystrokes are sent."
-        ), style="Desc.TLabel", wraplength=560, justify="left")
-        desc.pack(anchor="w", pady=(0, 12))
-
-        # Source text
-        src_frame = ttk.LabelFrame(parent, text="Source Text", padding=6)
-        src_frame.pack(fill="x", pady=(0, 8))
-        self._preview_src = tk.Text(src_frame, height=4, wrap="word", font=("Segoe UI", 10))
-        self._preview_src.pack(fill="both", expand=True)
-        self._preview_src.insert("1.0", "The quarterly results were excellent because Alice worked hard.")
-
-        # Controls
-        ctrl_frame = ttk.Frame(parent)
-        ctrl_frame.pack(fill="x", pady=(0, 8))
-
-        self._preview_btn = ttk.Button(
-            ctrl_frame, text="▶  Preview", command=self._start_preview
+        ctk.CTkLabel(parent, text="Source text", anchor="w", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w"
         )
-        self._preview_btn.pack(side="left", padx=(0, 8))
+        self._preview_src = ctk.CTkTextbox(parent, height=100, wrap="word")
+        self._preview_src.pack(fill="x", pady=(4, 12))
+        self._preview_src.insert(
+            "1.0", "The quarterly results were excellent because Alice worked hard."
+        )
 
-        self._preview_stop_btn = ttk.Button(
-            ctrl_frame, text="⏹  Stop", command=self._stop_preview, state="disabled"
+        ctrl = ctk.CTkFrame(parent, fg_color="transparent")
+        ctrl.pack(fill="x", pady=(0, 12))
+        self._preview_btn = ctk.CTkButton(ctrl, text="Preview", width=100, command=self._start_preview)
+        self._preview_btn.pack(side="left", padx=(0, 8))
+        self._preview_stop_btn = ctk.CTkButton(
+            ctrl, text="Stop", width=80, command=self._stop_preview, state="disabled"
         )
         self._preview_stop_btn.pack(side="left")
-
-        ttk.Label(ctrl_frame, text="Speed multiplier:").pack(side="left", padx=(20, 4))
+        ctk.CTkLabel(ctrl, text="Speed multiplier").pack(side="left", padx=(20, 6))
         self._preview_speed_var = tk.DoubleVar(value=1.0)
-        ttk.Spinbox(ctrl_frame, from_=0.1, to=5.0, increment=0.1,
-                    textvariable=self._preview_speed_var, width=5).pack(side="left")
+        ctk.CTkEntry(ctrl, textvariable=self._preview_speed_var, width=60).pack(side="left")
 
-        # Output text
-        out_frame = ttk.LabelFrame(parent, text="Preview Output", padding=6)
-        out_frame.pack(fill="both", expand=True)
-        self._preview_out = tk.Text(out_frame, height=8, wrap="word", font=("Consolas", 11),
-                                    state="normal", bg="#f8f8f8")
-        self._preview_out.pack(fill="both", expand=True)
-        self._preview_out.insert("1.0", "Preview output will appear here...")
-        self._preview_out.config(state="disabled")
-
-    def _build_hotkeys_tab(self, parent):
-        self._add_section(parent, "Hotkey Configuration")
-
-        is_mac = sys.platform == "darwin"
-        trigger_desc = "Cmd+Option+V" if is_mac else "Ctrl+Alt+V"
-        pause_desc = "Esc"
-
-        desc = ttk.Label(parent, text=(
-            "Click 'Record', then press your desired key combination.\n"
-            "The hotkey will be captured when you release a key."
-        ), style="Desc.TLabel", wraplength=560, justify="left")
-        desc.pack(anchor="w", pady=(0, 12))
-
-        hotkey_frame = ttk.Frame(parent)
-        hotkey_frame.pack(fill="x")
-        hotkey_frame.columnconfigure(1, weight=1)
-
-        self.hotkey_recorders["TriggerHotkey"] = HotkeyRecorder(
-            hotkey_frame,
-            f"Trigger Typing (default: {trigger_desc}):",
-            self.engine.hotkeys.get("TriggerHotkey", "ctrl+alt+v"),
-            row=0
+        ctk.CTkLabel(parent, text="Preview output", anchor="w", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w"
         )
+        self._preview_out = ctk.CTkTextbox(parent, height=200, wrap="word")
+        self._preview_out.pack(fill="both", expand=True, pady=(4, 0))
+        self._preview_out.insert("1.0", "Preview output will appear here…")
+        self._preview_out.configure(state="disabled")
 
-        self.hotkey_recorders["PauseKey"] = HotkeyRecorder(
-            hotkey_frame,
-            f"Pause / Abort (default: {pause_desc}):",
-            self.engine.hotkeys.get("PauseKey", "esc"),
-            row=1
-        )
+    # ─── Widget helpers ────────────────────────────────────────────
 
-        note = ttk.Label(parent, text=(
-            "Note: Hotkey changes take effect immediately after saving.\n"
-            "If you set an invalid combination, the previous hotkey "
-            "will be restored."
-        ), style="Desc.TLabel", wraplength=560, justify="left")
-        note.pack(anchor="w", pady=(20, 0))
+    def _add_section(self, parent, title: str):
+        ctk.CTkLabel(
+            parent, text=title, font=ctk.CTkFont(size=14, weight="bold"), anchor="w"
+        ).pack(anchor="w", pady=(16, 8))
 
-    # ─── Widget Helpers ────────────────────────────────────────────
+    def _add_slider(self, parent, key, label, min_val, max_val, tooltip="", prof=False):
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.pack(fill="x", pady=6)
 
-    def _add_section(self, parent, title):
-        lbl = ttk.Label(parent, text=title, style="Header.TLabel")
-        lbl.pack(anchor="w", pady=(14, 2))
-        ttk.Separator(parent, orient="horizontal").pack(fill="x", pady=(0, 8))
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.pack(fill="x")
+        ctk.CTkLabel(header, text=label, anchor="w").pack(side="left")
 
-    def _add_slider(self, parent, key, label, min_val, max_val, tooltip=""):
-        frame = ttk.Frame(parent)
-        frame.pack(fill="x", pady=(0, 4))
+        if prof:
+            current_val = int(self.engine.settings.get(key, 0))
+            var = tk.IntVar(value=current_val)
+            self._prof_vars[key] = var
+        else:
+            current_val = int(self.engine.settings.get(key, 0))
+            var = tk.IntVar(value=current_val)
+            self.vars[key] = var
+            var.trace_add("write", lambda *_: self._update_dirty_state())
 
-        current_val = self.engine.settings.get(key, 0)
-        self.vars[key] = tk.IntVar(value=current_val)
-
-        # Two-column layout: label left, value right
-        top_frame = ttk.Frame(frame)
-        top_frame.pack(fill="x")
-        ttk.Label(top_frame, text=label).pack(side="left")
-        val_lbl = ttk.Label(
-            top_frame, text=str(current_val), style="Value.TLabel"
-        )
+        val_lbl = ctk.CTkLabel(header, text=str(current_val), width=48, anchor="e")
         val_lbl.pack(side="right")
+        if not prof:
+            self._value_labels[key] = val_lbl
 
-        def update_lbl(v):
-            val_lbl.config(text=str(int(float(v))))
+        def on_slide(v):
+            val_lbl.configure(text=str(int(float(v))))
+            if not prof:
+                self._update_dirty_state()
 
-        s = ttk.Scale(
-            frame, from_=min_val, to=max_val, variable=self.vars[key],
-            orient="horizontal", command=update_lbl
+        slider = ctk.CTkSlider(
+            frame, from_=min_val, to=max_val, variable=var, command=on_slide, number_of_steps=max(max_val - min_val, 1),
         )
-        s.pack(fill="x", pady=(2, 0))
+        slider.pack(fill="x", pady=(4, 0))
 
         if tooltip:
-            add_tooltip(s, tooltip)
-            add_tooltip(frame, tooltip)
+            ctk.CTkLabel(frame, text=tooltip, text_color="gray60", font=ctk.CTkFont(size=11)).pack(
+                anchor="w", pady=(2, 0)
+            )
 
     def _add_checkbox(self, parent, key, label):
-        current_val = self.engine.settings.get(key, 0)
-        self.vars[key] = tk.BooleanVar(value=bool(current_val))
-        cb = ttk.Checkbutton(parent, text=label, variable=self.vars[key])
-        cb.pack(anchor="w", pady=3)
+        current_val = bool(self.engine.settings.get(key, 0))
+        var = tk.BooleanVar(value=current_val)
+        self.vars[key] = var
+        var.trace_add("write", lambda *_: self._update_dirty_state())
+        ctk.CTkCheckBox(parent, text=label, variable=var).pack(anchor="w", pady=4)
 
-    # ─── Preview Actions ───────────────────────────────────────────
+    # ─── Gather / apply / persist ──────────────────────────────────
 
-    def _start_preview(self):
-        text = self._preview_src.get("1.0", tk.END).rstrip("\n")
-        if not text:
-            return
-
-        self._preview_out.config(state="normal")
-        self._preview_out.delete("1.0", tk.END)
-        self._preview_out.config(state="disabled")
-
-        self._preview_btn.config(state="disabled")
-        self._preview_stop_btn.config(state="normal")
-
-        # Build a temporary settings dict scaled by speed multiplier
-        speed_mult = self._preview_speed_var.get()
-        preview_settings = {}
-        for k, v in self.engine.settings.items():
-            if isinstance(v, int) and "Delay" in k or "Pause" in k or "Ms" in k:
-                preview_settings[k] = max(1, int(v / speed_mult))
-            else:
-                preview_settings[k] = v
-        # Always keep these
-        preview_settings["UserMeanDelay"] = max(1, int(self.engine.settings.get("UserMeanDelay", 35) / speed_mult))
-        preview_settings["UserVariance"] = max(1, int(self.engine.settings.get("UserVariance", 45) / speed_mult))
-
-        self._preview_out.config(state="normal")
-        self._preview_engine = TypingPreview(
-            self._preview_out, preview_settings,
-            on_done=self._on_preview_done
-        )
-        self._preview_engine.start(text)
-
-    def _stop_preview(self):
-        if self._preview_engine:
-            self._preview_engine.stop()
-        self._on_preview_done()
-
-    def _on_preview_done(self):
-        self._preview_btn.config(state="normal")
-        self._preview_stop_btn.config(state="disabled")
-        self._preview_engine = None
-
-    # ─── Presets ───────────────────────────────────────────────────
-
-    def _on_preset_change(self, _event=None):
-        name = self._preset_var.get()
-        if name == "Custom" or name not in self.PRESETS:
-            return
-
-        preset = self.PRESETS[name]
-        for key, val in preset.items():
-            if key in self.vars:
-                var = self.vars[key]
-                if isinstance(var, tk.BooleanVar):
-                    var.set(bool(val))
-                elif isinstance(var, tk.IntVar):
-                    var.set(val)
-
-    # ─── Profile Actions ───────────────────────────────────────────
-
-    def _refresh_profile_listbox(self):
-        """Populate the profile listbox from engine's profile manager."""
-        self._profile_listbox.delete(0, tk.END)
-        for name in self.engine.profile_manager.profiles:
-            self._profile_listbox.insert(tk.END, name)
-
-    def _on_profile_select(self, _event=None):
-        """Load selected profile values into the editor."""
-        sel = self._profile_listbox.curselection()
-        if not sel:
-            return
-        name = self._profile_listbox.get(sel[0])
-        prof = self.engine.profile_manager.profiles.get(name, {})
-        self._prof_pattern_var.set(prof.get("windowpattern", ""))
-        for key, var in self._prof_vars.items():
-            var.set(int(prof.get(key, self.engine.defaults.get(key, 0))))
-
-    def _add_profile(self):
-        """Add a blank profile entry."""
-        from tkinter import simpledialog
-        name = simpledialog.askstring("Profile Name", "Enter a name for this profile:",
-                                      parent=self.root)
-        if not name:
-            return
-        name = name.strip()
-        if not name:
-            return
-        # Ensure section header format
-        self._refresh_profile_listbox()
-        self._prof_pattern_var.set("")
-        for key, var in self._prof_vars.items():
-            var.set(self.engine.settings.get(key, 0))
-
-    def _delete_profile(self):
-        """Remove the selected profile."""
-        sel = self._profile_listbox.curselection()
-        if not sel:
-            return
-        name = self._profile_listbox.get(sel[0])
-        self.engine.profile_manager.profiles.pop(name, None)
-        # Also remove from config
-        section = f"Profile:{name}"
-        self.engine.config.remove_section(section)
-        self._refresh_profile_listbox()
-
-    def _save_profile(self):
-        """Save the current profile editor values."""
-        sel = self._profile_listbox.curselection()
-        name = sel[0] if sel else None
-        if name is None:
-            from tkinter import simpledialog
-            name = simpledialog.askstring("Profile Name", "Enter profile name:",
-                                          parent=self.root)
-            if not name:
-                return
-            name = name.strip()
-            if not name:
-                return
-        else:
-            name = self._profile_listbox.get(name)
-
-        profile = {"windowpattern": self._prof_pattern_var.get().strip()}
-        for key, var in self._prof_vars.items():
-            profile[key] = str(var.get())
-
-        self.engine.profile_manager.profiles[name] = profile
-        section = f"Profile:{name}"
-        if not self.engine.config.has_section(section):
-            self.engine.config.add_section(section)
-        for k, v in profile.items():
-            self.engine.config.set(section, k, v)
-
-        self._refresh_profile_listbox()
-
-    # ─── Import / Export ───────────────────────────────────────────
-
-    def _import_settings(self):
-        path = filedialog.askopenfilename(
-            title="Import Settings",
-            filetypes=[("INI files", "*.ini"), ("All files", "*.*")],
-            parent=self.root
-        )
-        if not path:
-            return
-        try:
-            shutil.copy(path, self.engine.ini_file)
-            self.engine.load_settings()
-            # Refresh all UI vars
-            for key, var in self.vars.items():
-                val = self.engine.settings.get(key, 0)
-                if isinstance(var, tk.BooleanVar):
-                    var.set(bool(val))
-                else:
-                    var.set(val)
-            for key, recorder in self.hotkey_recorders.items():
-                recorder.value = self.engine.hotkeys.get(key, recorder.value)
-                recorder.display_var.set(recorder.value)
-            self._refresh_profile_listbox()
-            messagebox.showinfo("Import Successful", f"Settings imported from:\n{path}", parent=self.root)
-        except Exception as e:
-            messagebox.showerror("Import Failed", str(e), parent=self.root)
-
-    def _export_settings(self):
-        path = filedialog.asksaveasfilename(
-            title="Export Settings",
-            defaultextension=".ini",
-            filetypes=[("INI files", "*.ini"), ("All files", "*.*")],
-            parent=self.root
-        )
-        if not path:
-            return
-        try:
-            shutil.copy(self.engine.ini_file, path)
-            messagebox.showinfo("Export Successful", f"Settings saved to:\n{path}", parent=self.root)
-        except Exception as e:
-            messagebox.showerror("Export Failed", str(e), parent=self.root)
-
-    # ─── Status ────────────────────────────────────────────────────
-
-    def _update_status(self):
-        """Show active profile info in the top bar."""
-        profiles = self.engine.profile_manager.profiles
-        if profiles:
-            count = len(profiles)
-            self._status_var.set(f"{count} profile{'s' if count != 1 else ''} configured")
-        else:
-            self._status_var.set("No profiles configured")
-
-    # ─── Actions ───────────────────────────────────────────────────
-
-    def _save(self):
-        hotkeys_changed = False
-
+    def _gather_settings_from_ui(self) -> tuple[dict, dict, bool]:
+        settings = {}
         for key, var in self.vars.items():
             if isinstance(var, tk.BooleanVar):
-                self.engine.settings[key] = 1 if var.get() else 0
+                settings[key] = 1 if var.get() else 0
             else:
-                self.engine.settings[key] = var.get()
+                settings[key] = int(var.get())
 
+        hotkeys = {}
+        hotkeys_changed = False
         for key, recorder in self.hotkey_recorders.items():
-            new_val = recorder.value
-            if new_val != self.engine.hotkeys.get(key, ""):
+            hotkeys[key] = recorder.value
+            if hotkeys[key] != self.engine.hotkeys.get(key, ""):
                 hotkeys_changed = True
-            self.engine.hotkeys[key] = new_val
+        return settings, hotkeys, hotkeys_changed
 
-        self.engine.save_settings()
-
-        # Persist profiles to the config file
+    def _persist_profiles_to_config(self):
         for name, prof in self.engine.profile_manager.profiles.items():
             section = f"Profile:{name}"
             if not self.engine.config.has_section(section):
                 self.engine.config.add_section(section)
             for k, v in prof.items():
-                self.engine.config.set(section, k, v)
-        # Remove stale profile sections
-        for section in self.engine.config.sections():
+                self.engine.config.set(section, k, str(v))
+        for section in list(self.engine.config.sections()):
             if section.startswith("Profile:"):
                 prof_name = section[8:]
                 if prof_name not in self.engine.profile_manager.profiles:
                     self.engine.config.remove_section(section)
-        with open(self.engine.ini_file, "w") as cf:
+
+    def _write_ini(self):
+        self.engine.save_settings()
+        self._persist_profiles_to_config()
+        with open(self.engine.ini_file, "w", encoding="utf-8") as cf:
             self.engine.config.write(cf)
+
+    def _apply_to_engine(self, *, close: bool = False) -> bool:
+        settings, hotkeys, hotkeys_changed = self._gather_settings_from_ui()
+        self.engine.settings.update(settings)
+        self.engine.hotkeys.update(hotkeys)
+
+        try:
+            self._write_ini()
+        except Exception as e:
+            messagebox.showerror("Save Failed", str(e), parent=self.root)
+            return False
 
         if self.engine.ui_update_callback:
             self.engine.ui_update_callback()
@@ -1012,38 +750,302 @@ class SettingsWindow:
                 messagebox.showwarning(
                     "Hotkey Error",
                     f"Could not register new hotkeys:\n{e}\n\n"
-                    "Previous hotkeys will be restored.",
-                    parent=self.root
+                    "Previous hotkeys may still be active.",
+                    parent=self.root,
                 )
 
-        self._on_close()
+        self._take_snapshot()
+        self._update_dirty_state()
+        self._show_apply_feedback("Settings applied")
+        self._update_status()
 
-    def _reset_defaults(self):
-        confirm = messagebox.askyesno(
-            "Reset to Defaults",
-            "Reset all settings to their default values?\n\n"
-            "Click 'Save' afterward to persist the changes.",
-            parent=self.root
-        )
-        if not confirm:
+        if close:
+            self._on_close(force=True)
+        return True
+
+    def _apply(self, close: bool = False):
+        self._apply_to_engine(close=close)
+
+    def _save(self, close: bool = True):
+        self._apply(close=close)
+
+    def _take_snapshot(self):
+        self._snapshot_settings, self._snapshot_hotkeys, _ = self._gather_settings_from_ui()
+
+    def _is_dirty(self) -> bool:
+        current_settings, current_hotkeys, _ = self._gather_settings_from_ui()
+        return current_settings != self._snapshot_settings or current_hotkeys != self._snapshot_hotkeys
+
+    def _update_dirty_state(self):
+        dirty = self._is_dirty()
+        state = "normal" if dirty else "disabled"
+        self._apply_btn.configure(state=state)
+
+    def _show_apply_feedback(self, message: str):
+        self._apply_feedback_var.set(message)
+        if self._apply_status_after:
+            self.root.after_cancel(self._apply_status_after)
+        self._apply_status_after = self.root.after(2500, lambda: self._apply_feedback_var.set(""))
+
+    # ─── Preview ───────────────────────────────────────────────────
+
+    def _preview_settings_dict(self) -> dict:
+        settings, _, _ = self._gather_settings_from_ui()
+        merged = self.engine.settings.copy()
+        merged.update(settings)
+        speed_mult = max(0.1, float(self._preview_speed_var.get()))
+        preview = {}
+        for k, v in merged.items():
+            if _is_timing_setting_key(k, v):
+                preview[k] = max(1, int(v / speed_mult))
+            else:
+                preview[k] = v
+        preview["UserMeanDelay"] = max(1, int(merged.get("UserMeanDelay", 35) / speed_mult))
+        preview["UserVariance"] = max(1, int(merged.get("UserVariance", 45) / speed_mult))
+        return preview
+
+    def _start_preview(self):
+        text = self._preview_src.get("1.0", "end").rstrip("\n")
+        if not text:
             return
 
-        for key, default_val in self.engine.defaults.items():
-            if key in self.vars:
-                var = self.vars[key]
-                if isinstance(var, tk.BooleanVar):
-                    var.set(bool(default_val))
-                else:
-                    var.set(default_val)
+        self._preview_out.configure(state="normal")
+        self._preview_out.delete("1.0", "end")
+        self._preview_btn.configure(state="disabled")
+        self._preview_stop_btn.configure(state="normal")
 
+        self._preview_engine = TypingPreview(
+            self._preview_out,
+            self._preview_settings_dict(),
+            on_done=self._on_preview_done,
+            after_widget=self.root,
+        )
+        self._preview_engine.start(text)
+
+    def _stop_preview(self):
+        if self._preview_engine:
+            self._preview_engine.stop()
+        self._on_preview_done()
+
+    def _on_preview_done(self):
+        self._preview_btn.configure(state="normal")
+        self._preview_stop_btn.configure(state="disabled")
+        self._preview_out.configure(state="disabled")
+        self._preview_engine = None
+
+    # ─── Presets ───────────────────────────────────────────────────
+
+    def _on_preset_change(self, choice=None):
+        name = choice or self._preset_var.get()
+        if name == "Custom" or name not in self.PRESETS:
+            return
+        for key, val in self.PRESETS[name].items():
+            if key not in self.vars:
+                continue
+            var = self.vars[key]
+            if isinstance(var, tk.BooleanVar):
+                var.set(bool(val))
+            else:
+                var.set(val)
+            if key in self._value_labels:
+                self._value_labels[key].configure(text=str(val))
+        self._update_dirty_state()
+
+    # ─── Profiles ──────────────────────────────────────────────────
+
+    def _refresh_profile_listbox(self):
+        self._profile_listbox.delete(0, tk.END)
+        for name in sorted(self.engine.profile_manager.profiles):
+            self._profile_listbox.insert(tk.END, name)
+
+    def _on_profile_select(self, _event=None):
+        sel = self._profile_listbox.curselection()
+        if not sel:
+            return
+        name = self._profile_listbox.get(sel[0])
+        prof = self.engine.profile_manager.profiles.get(name, {})
+        self._prof_pattern_var.set(prof.get("windowpattern", ""))
+        for key, var in self._prof_vars.items():
+            var.set(int(prof.get(key, self.engine.defaults.get(key, 0))))
+
+    def _add_profile(self):
+        dialog = ctk.CTkInputDialog(text="Enter a name for this profile:", title="Profile Name")
+        name = dialog.get_input()
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            return
+        if name in self.engine.profile_manager.profiles:
+            messagebox.showwarning("Profile", f"Profile '{name}' already exists.", parent=self.root)
+            return
+
+        profile = {"windowpattern": ""}
+        for key, var in self._prof_vars.items():
+            profile[key] = str(self.engine.settings.get(key, 0))
+        self.engine.profile_manager.profiles[name] = profile
+        self._write_ini()
+        self._refresh_profile_listbox()
+        names = list(self.engine.profile_manager.profiles.keys())
+        idx = names.index(name)
+        self._profile_listbox.selection_clear(0, tk.END)
+        self._profile_listbox.selection_set(idx)
+        self._profile_listbox.see(idx)
+        self._on_profile_select()
+        self._update_status()
+
+    def _delete_profile(self):
+        sel = self._profile_listbox.curselection()
+        if not sel:
+            return
+        name = self._profile_listbox.get(sel[0])
+        if not messagebox.askyesno("Delete Profile", f"Delete profile '{name}'?", parent=self.root):
+            return
+        self.engine.profile_manager.profiles.pop(name, None)
+        section = f"Profile:{name}"
+        if self.engine.config.has_section(section):
+            self.engine.config.remove_section(section)
+        self._write_ini()
+        self._refresh_profile_listbox()
+        self._prof_pattern_var.set("")
+        self._update_status()
+
+    def _save_profile(self):
+        sel = self._profile_listbox.curselection()
+        if sel:
+            name = self._profile_listbox.get(sel[0])
+        else:
+            dialog = ctk.CTkInputDialog(text="Enter profile name:", title="Profile Name")
+            name = dialog.get_input()
+            if not name:
+                return
+            name = name.strip()
+            if not name:
+                return
+
+        profile = {"windowpattern": self._prof_pattern_var.get().strip()}
+        for key, var in self._prof_vars.items():
+            profile[key] = str(int(var.get()))
+
+        self.engine.profile_manager.profiles[name] = profile
+        self._write_ini()
+        self._refresh_profile_listbox()
+        names = sorted(self.engine.profile_manager.profiles)
+        if name in names:
+            idx = names.index(name)
+            self._profile_listbox.selection_clear(0, tk.END)
+            self._profile_listbox.selection_set(idx)
+        self._update_status()
+        self._show_apply_feedback(f"Profile '{name}' saved")
+
+    # ─── Import / export ───────────────────────────────────────────
+
+    def _import_settings(self):
+        path = filedialog.askopenfilename(
+            title="Import Settings",
+            filetypes=[("INI files", "*.ini"), ("All files", "*.*")],
+            parent=self.root,
+        )
+        if not path:
+            return
+        try:
+            shutil.copy(path, self.engine.ini_file)
+            self.engine.load_settings()
+            self.engine.profile_manager.load(self.engine.config)
+            self._reload_ui_from_engine()
+            self._take_snapshot()
+            self._update_dirty_state()
+            messagebox.showinfo("Import Successful", f"Settings imported from:\n{path}", parent=self.root)
+        except Exception as e:
+            messagebox.showerror("Import Failed", str(e), parent=self.root)
+
+    def _export_settings(self):
+        if self._is_dirty():
+            if messagebox.askyesno(
+                "Unsaved Changes",
+                "Apply unsaved changes before exporting?",
+                parent=self.root,
+            ):
+                if not self._apply_to_engine(close=False):
+                    return
+        path = filedialog.asksaveasfilename(
+            title="Export Settings",
+            defaultextension=".ini",
+            filetypes=[("INI files", "*.ini"), ("All files", "*.*")],
+            parent=self.root,
+        )
+        if not path:
+            return
+        try:
+            shutil.copy(self.engine.ini_file, path)
+            messagebox.showinfo("Export Successful", f"Settings saved to:\n{path}", parent=self.root)
+        except Exception as e:
+            messagebox.showerror("Export Failed", str(e), parent=self.root)
+
+    def _reload_ui_from_engine(self):
+        for key, var in self.vars.items():
+            val = self.engine.settings.get(key, 0)
+            if isinstance(var, tk.BooleanVar):
+                var.set(bool(val))
+            else:
+                var.set(int(val))
+            if key in self._value_labels:
+                self._value_labels[key].configure(text=str(int(val)))
+        for key, recorder in self.hotkey_recorders.items():
+            recorder.value = self.engine.hotkeys.get(key, recorder.value)
+            recorder.display_var.set(recorder.value)
+        self._refresh_profile_listbox()
+        self._update_status()
+
+    # ─── Status / close ────────────────────────────────────────────
+
+    def _update_status(self):
+        profiles = self.engine.profile_manager.profiles
+        if profiles:
+            count = len(profiles)
+            self._status_var.set(f"{count} profile{'s' if count != 1 else ''} configured")
+        else:
+            self._status_var.set("No profiles configured")
+
+    def _reset_defaults(self):
+        if not messagebox.askyesno(
+            "Reset to Defaults",
+            "Reset all settings to their default values?\n\n"
+            "Use Apply or Save & Close to persist.",
+            parent=self.root,
+        ):
+            return
+        for key, default_val in self.engine.defaults.items():
+            if key not in self.vars:
+                continue
+            var = self.vars[key]
+            if isinstance(var, tk.BooleanVar):
+                var.set(bool(default_val))
+            else:
+                var.set(int(default_val))
+            if key in self._value_labels:
+                self._value_labels[key].configure(text=str(int(default_val)))
         for key, default_val in self.engine.default_hotkeys.items():
             if key in self.hotkey_recorders:
                 self.hotkey_recorders[key].value = default_val
                 self.hotkey_recorders[key].display_var.set(default_val)
-
         self._preset_var.set("Custom")
+        self._update_dirty_state()
 
-    def _on_close(self):
+    def _on_close(self, force: bool = False):
+        if not force and self._is_dirty():
+            answer = messagebox.askyesnocancel(
+                "Unsaved Changes",
+                "You have unsaved changes. Save before closing?",
+                parent=self.root,
+            )
+            if answer is None:
+                return
+            if answer:
+                if not self._apply_to_engine(close=True):
+                    return
+                return
+
         if self._preview_engine:
             self._preview_engine.stop()
         SettingsWindow._instance_open = False

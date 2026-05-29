@@ -9,7 +9,7 @@ datas = [
     ('scripts/launch_chrome_win.bat', '.'),
 ]
 binaries = []
-hiddenimports = ['settings_gui', 'first_run', 'updater', 'version', 'os_layer.os_typing_driver_win', 'os_layer.hybrid_driver_win', 'os_layer.playwright_driver_win', 'os_layer.playwright_driver_mac', 'rich_text_formatter', 'semantic_analyzer', 'typing_planner', 'formatters', 'formatters.google_docs_formatter', 'formatters.instruction', 'formatters.backends.cdp_backend', 'formatters.backends.os_backend']
+hiddenimports = ['settings_gui', 'first_run', 'updater', 'version', 'iki_timing', 'os_layer.os_typing_driver_win', 'os_layer.hybrid_driver_win', 'os_layer.playwright_driver_win', 'os_layer.playwright_driver_mac', 'rich_text_formatter', 'semantic_analyzer', 'typing_planner', 'formatters', 'formatters.google_docs_formatter', 'formatters.instruction', 'formatters.backends.cdp_backend', 'formatters.backends.os_backend']
 
 # Collect playwright LIBRARY only — not the browser binaries.
 tmp_ret = collect_all('playwright')
@@ -20,6 +20,16 @@ pw_datas = [(src, dst) for src, dst in tmp_ret[0]
 datas += pw_datas
 binaries += tmp_ret[1]
 hiddenimports += tmp_ret[2]
+
+# CustomTkinter theme assets
+for pkg in ('customtkinter', 'darkdetect'):
+    try:
+        pkg_ret = collect_all(pkg)
+        datas += pkg_ret[0]
+        binaries += pkg_ret[1]
+        hiddenimports += pkg_ret[2]
+    except Exception:
+        pass
 
 # Bundle spaCy + model so the installer is fully self-contained
 for pkg in ('spacy', 'thinc', 'blis', 'en_core_web_md', 'nltk'):

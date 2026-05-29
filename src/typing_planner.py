@@ -139,7 +139,10 @@ class TypingPlanner:
                 revision_candidate=rev_cand,
                 revision_span=None,
                 pause_before_ms=pause_before,
-                pause_after_ms=self._clause_pause_ms(meta.clause_boundary) + pause_after,
+                pause_after_ms=(
+                    (self._clause_pause_ms(meta.clause_boundary) if meta.text.strip() else 0)
+                    + pause_after
+                ),
                 is_entity=meta.is_entity,
                 chunk_burst=False,
                 composition_score=score,
@@ -161,6 +164,8 @@ class TypingPlanner:
     ) -> Tuple[int, int, float]:
         if not comp.enabled or not metas:
             return 0, 0, 0.0
+        if not any(m.text.strip() for m in metas):
+            return 0, 0, 0.0
 
         rng = self._directive_rng(text, directive_index)
         scale = max(0.0, min(2.0, comp.sensitivity / 50.0))
@@ -171,7 +176,7 @@ class TypingPlanner:
         tier = self._position_tier(metas)
         any_hard = any(m.is_hard_word for m in metas)
 
-        if tier == "paragraph_start":
+        if tier == "paragraph_start" and directive_index > 0:
             para_lo = comp.paragraph_planning_min_ms
             para_hi = comp.paragraph_planning_max_ms
             length_factor = min(1.0, prior_paragraph_tokens / 40.0)

@@ -8,7 +8,7 @@ datas = [
     ('assets', 'assets'),
 ]
 binaries = []
-hiddenimports = ['settings_gui', 'first_run', 'updater', 'version']
+hiddenimports = ['settings_gui', 'first_run', 'updater', 'version', 'iki_timing']
 
 # Collect playwright LIBRARY only — not the browser binaries.
 tmp_ret = collect_all('playwright')
@@ -19,6 +19,16 @@ pw_datas = [(src, dst) for src, dst in tmp_ret[0]
 datas += pw_datas
 binaries += tmp_ret[1]
 hiddenimports += tmp_ret[2]
+
+# CustomTkinter theme assets
+for pkg in ('customtkinter', 'darkdetect'):
+    try:
+        pkg_ret = collect_all(pkg)
+        datas += pkg_ret[0]
+        binaries += pkg_ret[1]
+        hiddenimports += pkg_ret[2]
+    except Exception:
+        pass
 
 # Bundle spaCy + model so the installer is fully self-contained
 for pkg in ('spacy', 'thinc', 'blis', 'en_core_web_md', 'nltk'):

@@ -73,8 +73,8 @@ class RichTextFormatter:
             self._mod = "Control"   # Playwright key name for Ctrl on Windows/Linux
 
         # Regex to detect list-item lines (unordered or ordered)
-        self._unordered_re = re.compile(r'^(\s*)[-*]\s+(.*)', re.DOTALL)
-        self._ordered_re   = re.compile(r'^(\s*)(\d+)\.\s+(.*)', re.DOTALL)
+        self._unordered_re = re.compile(r'^(\s*)[-*]\s*(.*)', re.DOTALL)
+        self._ordered_re   = re.compile(r'^(\s*)(\d+)\.\s*(.*)', re.DOTALL)
 
         # Regex for markdown tables
         self._table_sep_re = re.compile(r'^\|[\s\-:|]+\|\s*$')
@@ -97,6 +97,7 @@ class RichTextFormatter:
         list_state: str | None = None   # "ul" | "ol" | None
         is_first_line = True
 
+        just_exited_list = False
         for line_idx, raw_line in enumerate(lines):
             # Peek at the next non-empty line to decide list continuation
             next_line = lines[line_idx + 1] if line_idx + 1 < len(lines) else ""
@@ -203,13 +204,15 @@ class RichTextFormatter:
                     actions.append(KeyAction("Enter"))
                     actions.append(KeyAction("Enter"))
                     list_state = None
+                    just_exited_list = True
 
-                if not is_first_line and raw_line.strip():
+                if not is_first_line and raw_line.strip() and not just_exited_list:
                     # Emit the newline between non-empty lines
                     actions.append(KeyAction("\n"))   # engine maps \n → Enter/Shift+Enter
 
                 # Type the line content with inline formatting
                 actions.extend(self._parse_inline(raw_line))
+                just_exited_list = False
 
             is_first_line = False
 
