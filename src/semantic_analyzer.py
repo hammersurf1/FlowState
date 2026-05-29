@@ -7,6 +7,7 @@ Context-aware smart revisions use Lesk WSD plus local vector fit scoring.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import List, Optional, Set, Tuple
 
@@ -24,6 +25,14 @@ _POS_TO_WORDNET = {
 
 _CONTEXT_WINDOW = 3
 _DEFAULT_MIN_FIT = 0.97
+_HARD_WORD_RANK = 6000
+
+_DISCOURSE_MARKERS = frozenset({
+    "however", "therefore", "moreover", "although", "because", "furthermore",
+    "nevertheless", "meanwhile", "consequently", "thus", "hence", "nonetheless",
+    "otherwise", "instead", "similarly", "likewise", "indeed", "finally",
+    "firstly", "secondly", "ultimately", "specifically", "particularly",
+})
 
 
 @dataclass(frozen=True)
@@ -40,6 +49,10 @@ class TokenMeta:
     in_noun_chunk: bool           # Part of a doc.noun_chunks span
     chunk_end: bool               # True if this token is the last token of its noun chunk
     clause_boundary: bool         # True if token ends a subordinate clause
+    sentence_start: bool = False  # First token of a spaCy sentence
+    paragraph_start: bool = False   # First token after a blank line or start of doc
+    is_discourse_marker: bool = False  # Sentence-initial discourse connective
+    is_hard_word: bool = False      # Uncommon vocabulary (rank above threshold)
 
 
 class SemanticAnalyzer:
@@ -85,6 +98,18 @@ class SemanticAnalyzer:
         """Parse *text* and return TokenMeta list plus the spaCy Doc."""
         return self._build_metas(self.nlp(text))
 
+    @staticmethod
+    def _paragraph_start_indices(doc: Doc) -> Set[int]:
+        """Token indices that begin a paragraph (after blank line or doc start)."""
+        starts: Set[int] = {0} if len(doc) else set()
+        for match in re.finditer(r"\n\n\s*", doc.text):
+            char_pos = match.end()
+            for token in doc:
+                if token.idx >= char_pos:
+                    starts.add(token.i)
+                    break
+        return starts
+
     def _build_metas(self, doc: Doc) -> Tuple[List[TokenMeta], Doc]:
         chunk_tokens: Set[int] = set()
         chunk_end_tokens: Set[int] = set()
@@ -98,6 +123,9 @@ class SemanticAnalyzer:
             for idx in range(ent.start, ent.end):
                 entity_tokens[idx] = ent.label_
 
+        sentence_starts = {sent.start for sent in doc.sents}
+        paragraph_starts = self._paragraph_start_indices(doc)
+
         metas: List[TokenMeta] = []
         for token in doc:
             is_clause_boundary = token.dep_ in self._CLAUSE_CLOSERS
@@ -107,6 +135,14 @@ class SemanticAnalyzer:
                 if subtree and token.i == subtree[-1].i:
                     is_clause_boundary = True
 
+            rank = token.rank if hasattr(token, "rank") else 10_000
+            lemma = token.text.lower().rstrip(",:;")
+            is_sentence_start = token.i in sentence_starts
+            is_discourse = (
+                is_sentence_start
+                and lemma in _DISCOURSE_MARKERS
+            )
+
             metas.append(TokenMeta(
                 idx=token.i,
                 text=token.text_with_ws,
@@ -115,10 +151,14 @@ class SemanticAnalyzer:
                 head_idx=token.head.i,
                 is_entity=token.i in entity_tokens,
                 entity_label=entity_tokens.get(token.i),
-                rank=token.rank if hasattr(token, "rank") else 10_000,
+                rank=rank,
                 in_noun_chunk=token.i in chunk_tokens,
                 chunk_end=token.i in chunk_end_tokens,
                 clause_boundary=is_clause_boundary,
+                sentence_start=is_sentence_start,
+                paragraph_start=token.i in paragraph_starts,
+                is_discourse_marker=is_discourse,
+                is_hard_word=rank > _HARD_WORD_RANK,
             ))
 
         return metas, doc
@@ -377,6 +417,30 @@ class SemanticAnalyzer:
         stored = [c.lower() for _, c in scored[:max_results]]
         self._context_synonym_cache[cache_key] = stored
         return [self._match_case(token_text, c) for c in stored]
+
+    def synonym_ambiguity_score(self, doc: Doc, token_idx: int) -> float:
+        """Return 0–1 score: higher when many plausible synonym alternatives exist."""
+        token = doc[token_idx]
+        if not token.text.strip().isalpha():
+            return 0.0
+        if token.pos_ not in ("NOUN", "VERB", "ADJ", "ADV"):
+            return 0.0
+
+        cands = self.contextual_synonym_candidates(
+            doc, token_idx, max_results=5, min_fit=0.95,
+        )
+        if len(cands) < 2:
+            return 0.0
+
+        fits = [self._contextual_fit(doc, token_idx, cand) for cand in cands[:3]]
+        if not fits:
+            return 0.0
+
+        count_factor = min(len(cands), 5) / 5.0
+        spread = max(fits) - min(fits) if len(fits) > 1 else 0.0
+        # Many close-fit alternatives imply word-choice hesitation.
+        ambiguity = count_factor * (1.0 - min(spread, 0.05) / 0.05)
+        return min(1.0, max(0.0, ambiguity))
 
     def synonym_candidates(self, token_text: str, pos: str, max_results: int = 5) -> List[str]:
         """Return plausible synonym substitutes (word-only, no context)."""

@@ -32,6 +32,21 @@ brainstormfrequency = 60
 # Pause after typing an emoji (milliseconds)
 emojipausems = 1800
 
+# Minimum content-aware hesitation before a word or phrase (milliseconds)
+compositionpauseminms = 300
+
+# Maximum pre-typing composition pause (milliseconds)
+compositionpausemaxms = 6000
+
+# Minimum pause before starting a new paragraph (milliseconds)
+paragraphplanningminms = 2000
+
+# Maximum pause before starting a new paragraph (milliseconds)
+paragraphplanningmaxms = 8000
+
+# Scale for content-aware pauses (0-100, 50 = normal)
+compositionsensitivity = 50
+
 [Behavior]
 # Enable spatial/transposition/omission/doubling typos
 enabletypos = 1
@@ -80,6 +95,9 @@ enablenumbersymbolcare = 1
 
 # Caps Lock realism — delay on first capital only in a run
 enablecapsrunrealism = 1
+
+# Composition pauses — content-aware drafting hesitation
+enablecompositionpauses = 0
 
 [Hotkeys]
 triggerhotkey = ctrl+alt+v

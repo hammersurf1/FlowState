@@ -25,6 +25,23 @@ def test_analyze_tokens(analyzer):
     assert len(doc) == len(metas)
 
 
+def test_paragraph_start_detection(analyzer):
+    text = "First paragraph ends here.\n\nHowever, the second begins."
+    metas, _ = analyzer.analyze(text)
+    however = next(m for m in metas if m.text.strip().lower().startswith("however"))
+    assert however.paragraph_start is True
+    assert however.sentence_start is True
+    assert however.is_discourse_marker is True
+
+
+def test_hard_word_flag(analyzer):
+    metas, _ = analyzer.analyze("The government must implement significant reforms.")
+    reforms = next(m for m in metas if m.text.strip() == "reforms")
+    assert reforms.is_hard_word is True
+    the = next(m for m in metas if m.text.strip() == "The")
+    assert the.is_hard_word is False
+
+
 def test_synonym_candidates_verb(analyzer):
     syns = analyzer.synonym_candidates("run", "VERB")
     assert len(syns) > 0

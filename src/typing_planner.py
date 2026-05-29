@@ -5,6 +5,7 @@ Converts TokenMeta stream into directives that the TypingEngine executes.
 
 from __future__ import annotations
 
+import hashlib
 import random
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -14,6 +15,18 @@ from spacy.tokens import Doc
 
 _REVISION_POS = ("NOUN", "VERB", "ADJ", "ADV")
 RevisionSpan = Tuple[int, int, str]  # (start, end, wrong_word)
+_COMPOSITION_PAUSE_CAP_MS = 10_000
+
+
+@dataclass(frozen=True)
+class CompositionSettings:
+    """Knobs for content-aware composition pauses."""
+    enabled: bool = False
+    sensitivity: int = 50
+    pause_min_ms: int = 300
+    pause_max_ms: int = 6000
+    paragraph_planning_min_ms: int = 2000
+    paragraph_planning_max_ms: int = 8000
 
 
 @dataclass(frozen=True)
@@ -27,9 +40,11 @@ class TypingDirective:
     typo_chance_adjustment: int = 0  # Rank-based adjustment (negative = fewer typos)
     revision_candidate: Optional[str] = None  # Similar word to type-then-replace
     revision_span: Optional[RevisionSpan] = None  # In-chunk word revision
+    pause_before_ms: int = 0      # Composition hesitation before typing
     pause_after_ms: int = 0       # Extra pause after this directive finishes
     is_entity: bool = False
     chunk_burst: bool = False     # True if part of a noun chunk
+    composition_score: float = 0.0  # Relative composition difficulty (debug)
 
 
 class TypingPlanner:
@@ -38,11 +53,20 @@ class TypingPlanner:
     def __init__(self, analyzer: SemanticAnalyzer):
         self.analyzer = analyzer
 
-    def plan(self, text: str, mean_delay: int, variance: int) -> List[TypingDirective]:
+    def plan(
+        self,
+        text: str,
+        mean_delay: int,
+        variance: int,
+        composition: Optional[CompositionSettings] = None,
+    ) -> List[TypingDirective]:
         """Return directives for the engine."""
+        comp = composition or CompositionSettings()
         metas, doc = self.analyzer.analyze(text)
         directives: List[TypingDirective] = []
 
+        prior_paragraph_tokens = 0
+        directive_index = 0
         i = 0
         while i < len(metas):
             meta = metas[i]
@@ -62,6 +86,12 @@ class TypingPlanner:
                 is_ent = any(m.is_entity for m in chunk_metas)
                 any_clause = any(m.clause_boundary for m in chunk_metas)
 
+                pause_before, pause_after, score = self._composition_pauses(
+                    chunk_metas, doc, text, directive_index, comp, prior_paragraph_tokens,
+                )
+                if chunk_metas[0].paragraph_start and directive_index > 0:
+                    prior_paragraph_tokens = 0
+
                 directives.append(TypingDirective(
                     text=chunk_text,
                     base_delay_ms=mean_delay,
@@ -71,14 +101,24 @@ class TypingPlanner:
                     typo_chance_adjustment=self._typo_adjustment(max_rank),
                     revision_candidate=None,
                     revision_span=self._pick_chunk_revision(chunk_text, chunk_metas, doc),
-                    pause_after_ms=self._clause_pause_ms(any_clause),
+                    pause_before_ms=pause_before,
+                    pause_after_ms=self._clause_pause_ms(any_clause) + pause_after,
                     is_entity=is_ent,
                     chunk_burst=True,
+                    composition_score=score,
                 ))
+                prior_paragraph_tokens += len(chunk_metas)
+                directive_index += 1
                 i = j + 1
                 continue
 
             rev_cand = self._pick_revision(meta, doc)
+
+            pause_before, pause_after, score = self._composition_pauses(
+                [meta], doc, text, directive_index, comp, prior_paragraph_tokens,
+            )
+            if meta.paragraph_start and directive_index > 0:
+                prior_paragraph_tokens = 0
 
             directives.append(TypingDirective(
                 text=meta.text,
@@ -89,13 +129,86 @@ class TypingPlanner:
                 typo_chance_adjustment=self._typo_adjustment(meta.rank),
                 revision_candidate=rev_cand,
                 revision_span=None,
-                pause_after_ms=self._clause_pause_ms(meta.clause_boundary),
+                pause_before_ms=pause_before,
+                pause_after_ms=self._clause_pause_ms(meta.clause_boundary) + pause_after,
                 is_entity=meta.is_entity,
                 chunk_burst=False,
+                composition_score=score,
             ))
+            prior_paragraph_tokens += 1
+            directive_index += 1
             i += 1
 
         return directives
+
+    def _composition_pauses(
+        self,
+        metas: List[TokenMeta],
+        doc: Doc,
+        text: str,
+        directive_index: int,
+        comp: CompositionSettings,
+        prior_paragraph_tokens: int,
+    ) -> Tuple[int, int, float]:
+        if not comp.enabled or not metas:
+            return 0, 0, 0.0
+
+        rng = self._directive_rng(text, directive_index)
+        scale = max(0.0, min(2.0, comp.sensitivity / 50.0))
+        score = 0.0
+        before_ms = 0
+
+        primary = metas[0]
+        max_rank = max(m.rank for m in metas)
+        any_hard = any(m.is_hard_word for m in metas)
+        any_entity = any(m.is_entity for m in metas)
+
+        if any_hard:
+            score += 0.35
+            before_ms += rng.randint(400, 1200)
+
+        if any_entity:
+            score += 0.15
+            before_ms += rng.randint(200, 600)
+
+        if primary.is_discourse_marker:
+            score += 0.25
+            before_ms += rng.randint(300, 800)
+
+        if primary.paragraph_start:
+            para_lo = comp.paragraph_planning_min_ms
+            para_hi = comp.paragraph_planning_max_ms
+            length_factor = min(1.0, prior_paragraph_tokens / 40.0)
+            para_lo = int(para_lo + length_factor * (para_hi - para_lo) * 0.4)
+            score += 0.5 + length_factor * 0.3
+            before_ms += rng.randint(para_lo, para_hi)
+
+            if primary.sentence_start and any_hard:
+                score += 0.2
+                before_ms += rng.randint(500, 2000)
+
+        for meta in metas:
+            if meta.text.strip().isalpha() and meta.pos in _REVISION_POS:
+                ambiguity = self.analyzer.synonym_ambiguity_score(doc, meta.idx)
+                if ambiguity > 0.3:
+                    score += ambiguity * 0.3
+                    lo = int(500 + ambiguity * 500)
+                    hi = int(1000 + ambiguity * 500)
+                    before_ms += rng.randint(lo, hi)
+                break
+
+        before_ms = int(before_ms * scale)
+        if before_ms <= 0:
+            return 0, 0, min(1.0, score)
+        before_ms = max(comp.pause_min_ms, before_ms)
+        before_ms = min(before_ms, comp.pause_max_ms, _COMPOSITION_PAUSE_CAP_MS)
+
+        return before_ms, 0, min(1.0, score)
+
+    @staticmethod
+    def _directive_rng(text: str, directive_index: int) -> random.Random:
+        digest = hashlib.md5(f"{text}:{directive_index}".encode()).hexdigest()
+        return random.Random(int(digest[:8], 16))
 
     def _is_revision_eligible(self, meta: TokenMeta) -> bool:
         if meta.is_entity:

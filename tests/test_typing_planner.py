@@ -1,7 +1,7 @@
 import random
 
 import pytest
-from typing_planner import TypingPlanner
+from typing_planner import TypingPlanner, CompositionSettings
 from semantic_analyzer import SemanticAnalyzer
 
 
@@ -49,3 +49,47 @@ def test_revision_candidates_without_double_gate(planner):
     directives = planner.plan(essay, 110, 45)
     with_candidates = [d for d in directives if d.revision_candidate or d.revision_span]
     assert len(with_candidates) >= 1
+
+
+def _composition_settings(**overrides):
+    defaults = dict(
+        enabled=True,
+        sensitivity=50,
+        pause_min_ms=300,
+        pause_max_ms=6000,
+        paragraph_planning_min_ms=2000,
+        paragraph_planning_max_ms=8000,
+    )
+    defaults.update(overrides)
+    return CompositionSettings(**defaults)
+
+
+def test_composition_disabled_has_no_pre_pauses(planner):
+    text = "First line.\n\nHowever, the second paragraph uses reforms."
+    directives = planner.plan(text, 50, 30, composition=CompositionSettings())
+    assert all(d.pause_before_ms == 0 for d in directives)
+
+
+def test_composition_paragraph_start_pause(planner):
+    text = "Opening paragraph here.\n\nHowever, another begins."
+    comp = _composition_settings()
+    directives = planner.plan(text, 50, 30, composition=comp)
+    however = next(d for d in directives if d.text.strip().lower().startswith("however"))
+    assert however.pause_before_ms >= comp.paragraph_planning_min_ms
+
+
+def test_composition_hard_word_pause(planner):
+    text = "The government must implement significant reforms."
+    comp = _composition_settings()
+    directives = planner.plan(text, 50, 30, composition=comp)
+    reforms = next(d for d in directives if "reforms" in d.text)
+    assert reforms.pause_before_ms >= comp.pause_min_ms
+    assert reforms.composition_score > 0
+
+
+def test_composition_deterministic(planner):
+    text = "First.\n\nHowever, implement the reforms."
+    comp = _composition_settings()
+    first = planner.plan(text, 50, 30, composition=comp)
+    second = planner.plan(text, 50, 30, composition=comp)
+    assert [d.pause_before_ms for d in first] == [d.pause_before_ms for d in second]

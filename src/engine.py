@@ -10,7 +10,7 @@ import sys
 
 from rich_text_formatter import RichTextFormatter, TypeAction, KeyAction, PasteHtmlAction, _platform_string
 from semantic_analyzer import SemanticAnalyzer
-from typing_planner import TypingPlanner
+from typing_planner import TypingPlanner, CompositionSettings
 try:
     from clipboard_reader import get_clipboard_styled_runs
     _HAS_CLIPBOARD_HTML = True
@@ -126,6 +126,10 @@ class TypingEngine:
             "EnableFingerPenalty": 1, "EnableFluencyStates": 1,
             "EnableNumberSymbolCare": 1, "EnableCapsRunRealism": 1,
             "EnableFrequencyTypos": 1, "EnableDeferredCorrections": 1,
+            "EnableCompositionPauses": 0,
+            "CompositionPauseMinMs": 300, "CompositionPauseMaxMs": 6000,
+            "ParagraphPlanningMinMs": 2000, "ParagraphPlanningMaxMs": 8000,
+            "CompositionSensitivity": 50,
         }
         self.default_hotkeys = {
             "TriggerHotkey": "ctrl+alt+v",
@@ -201,8 +205,30 @@ class TypingEngine:
                         self.settings[actual_key] = int(val)
                     except ValueError:
                         pass
+            if self._ini_missing_settings():
+                self.save_settings()
         else:
             self.save_settings()
+
+    def _ini_missing_settings(self) -> bool:
+        """True when settings.ini predates newly added schema keys."""
+        if not self.ini_file.exists():
+            return False
+
+        present = set()
+        for section in self.config.sections():
+            if section.lower().startswith("profile:"):
+                continue
+            for key, _ in self.config.items(section):
+                present.add(key.lower())
+
+        for key in self.defaults:
+            if key.lower() not in present:
+                return True
+        for key in self.default_hotkeys:
+            if key.lower() not in present:
+                return True
+        return False
 
     def save_settings(self):
         self.config['Settings'] = {
@@ -216,7 +242,12 @@ class TypingEngine:
             'SentencePauseMs': str(self.settings['SentencePauseMs']),
             'ParagraphPauseMs': str(self.settings['ParagraphPauseMs']),
             'BrainstormFrequency': str(self.settings['BrainstormFrequency']),
-            'EmojiPauseMs': str(self.settings['EmojiPauseMs'])
+            'EmojiPauseMs': str(self.settings['EmojiPauseMs']),
+            'CompositionPauseMinMs': str(self.settings['CompositionPauseMinMs']),
+            'CompositionPauseMaxMs': str(self.settings['CompositionPauseMaxMs']),
+            'ParagraphPlanningMinMs': str(self.settings['ParagraphPlanningMinMs']),
+            'ParagraphPlanningMaxMs': str(self.settings['ParagraphPlanningMaxMs']),
+            'CompositionSensitivity': str(self.settings['CompositionSensitivity']),
         }
         self.config['Behavior'] = {
             'UseEnterOnly': str(self.settings['UseEnterOnly']),
@@ -235,6 +266,7 @@ class TypingEngine:
             'EnableCapsRunRealism': str(self.settings['EnableCapsRunRealism']),
             'EnableFrequencyTypos': str(self.settings['EnableFrequencyTypos']),
             'EnableDeferredCorrections': str(self.settings['EnableDeferredCorrections']),
+            'EnableCompositionPauses': str(self.settings['EnableCompositionPauses']),
         }
         self.config['Hotkeys'] = {
             'TriggerHotkey': self.hotkeys['TriggerHotkey'],
@@ -679,15 +711,25 @@ class TypingEngine:
             self.settings["EnableChunkBurst"],
             self.settings["EnableSmartRevisions"],
             self.settings["EnableEntityCare"],
+            self.settings["EnableCompositionPauses"],
         ])
 
         if semantic_active:
             self._ensure_semantic_layer()
             assert self._planner is not None
+            composition = CompositionSettings(
+                enabled=bool(self.settings["EnableCompositionPauses"]),
+                sensitivity=self.settings["CompositionSensitivity"],
+                pause_min_ms=self.settings["CompositionPauseMinMs"],
+                pause_max_ms=self.settings["CompositionPauseMaxMs"],
+                paragraph_planning_min_ms=self.settings["ParagraphPlanningMinMs"],
+                paragraph_planning_max_ms=self.settings["ParagraphPlanningMaxMs"],
+            )
             directives = self._planner.plan(
                 text=clipboard_text,
                 mean_delay=self.settings["UserMeanDelay"],
                 variance=self.settings["UserVariance"],
+                composition=composition,
             )
             self._execute_directives(directives, neighbor_map)
         else:
@@ -829,6 +871,10 @@ class TypingEngine:
             text = directive.text
             text_len = len(text)
 
+            if self.settings["EnableCompositionPauses"] and directive.pause_before_ms:
+                self._sleep(directive.pause_before_ms / 1000.0)
+                self.current_momentum = 0
+
             if self._should_smart_revise(directive):
                 if directive.revision_span:
                     start, end, wrong = directive.revision_span
@@ -877,7 +923,7 @@ class TypingEngine:
                 self.current_momentum = 0
                 self._in_number_symbol_run = False
 
-            if self.settings["EnableBrainstormPauses"]:
+            if self.settings["EnableBrainstormPauses"] and not self.settings["EnableCompositionPauses"]:
                 ends_with_space = directive.text.endswith(" ")
                 ends_with_sentence = stripped and stripped[-1] in [".", "?", "!", "\n"]
                 freq = self.settings["BrainstormFrequency"]
@@ -888,6 +934,9 @@ class TypingEngine:
                 elif ends_with_sentence and roll <= 2:
                     self._sleep(random.randint(1500, 4000) / 1000.0)
                     self.current_momentum = 0
+            elif self.settings["EnableBrainstormPauses"] and self.settings["EnableCompositionPauses"]:
+                if random.randint(1, self.settings["BrainstormFrequency"]) == 1:
+                    self._sleep(random.randint(0, 500) / 1000.0)
 
     def _inject_typo(self, char, remaining_text, neighbor_map):
         """Attempt a single-character typo. Returns chars consumed (0 = no typo)."""

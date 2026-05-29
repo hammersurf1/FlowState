@@ -229,6 +229,7 @@ FlowState uses **spaCy** with the `en_core_web_md` model to make typing feel gen
 | **Chunk Burst** | Treats noun phrases like "the quarterly results" as a single cognitive burst, reducing hesitation inside the phrase. |
 | **Frequency Typos** | Very common words get fewer typos; rare words get the full typo chance. |
 | **Deferred Corrections** | Sometimes finishes the current word before backspacing a typo, just like a real person would. |
+| **Composition Pauses** | Content-aware drafting hesitation before hard words, discourse markers, and new paragraphs. Uses the **Essay Drafting** preset or enable manually in Settings. Replaces random brainstorm pauses when active. |
 
 ### Motor Realism
 

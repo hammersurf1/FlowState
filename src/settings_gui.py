@@ -315,6 +315,27 @@ class SettingsWindow:
             "EnableNumberSymbolCare": 1, "EnableCapsRunRealism": 1,
             "EnableSemanticSpeed": 1, "EnableClausePauses": 1,
             "EnableChunkBurst": 1, "EnableEntityCare": 1,
+            "EnableCompositionPauses": 0,
+            "CompositionPauseMinMs": 300, "CompositionPauseMaxMs": 6000,
+            "ParagraphPlanningMinMs": 2000, "ParagraphPlanningMaxMs": 8000,
+            "CompositionSensitivity": 50,
+        },
+        "Essay Drafting": {
+            "UserMeanDelay": 95, "UserVariance": 55,
+            "TypoChance": 4, "TypoDelay": 140, "RevisionChance": 8,
+            "SentencePauseMs": 1800, "ParagraphPauseMs": 3500,
+            "BrainstormFrequency": 60, "EmojiPauseMs": 2200,
+            "EnableTypos": 1, "EnableRevisions": 1,
+            "EnableBrainstormPauses": 0, "EnableSmartRevisions": 1,
+            "EnableFrequencyTypos": 1, "EnableDeferredCorrections": 1,
+            "EnableFingerPenalty": 1, "EnableFluencyStates": 1,
+            "EnableNumberSymbolCare": 1, "EnableCapsRunRealism": 1,
+            "EnableSemanticSpeed": 1, "EnableClausePauses": 1,
+            "EnableChunkBurst": 1, "EnableEntityCare": 1,
+            "EnableCompositionPauses": 1,
+            "CompositionPauseMinMs": 400, "CompositionPauseMaxMs": 8000,
+            "ParagraphPlanningMinMs": 3000, "ParagraphPlanningMaxMs": 9000,
+            "CompositionSensitivity": 65,
         },
     }
 
@@ -480,6 +501,26 @@ class SettingsWindow:
             parent, "BrainstormFrequency", "Random Pause Frequency",
             10, 200, "Average words between random 'thinking' pauses"
         )
+        self._add_slider(
+            parent, "CompositionPauseMinMs", "Composition Pause Min (ms)",
+            0, 2000, "Minimum content-aware hesitation before a word or phrase"
+        )
+        self._add_slider(
+            parent, "CompositionPauseMaxMs", "Composition Pause Max (ms)",
+            1000, 10000, "Maximum pre-typing composition pause"
+        )
+        self._add_slider(
+            parent, "ParagraphPlanningMinMs", "Paragraph Planning Min (ms)",
+            500, 6000, "Minimum pause before starting a new paragraph"
+        )
+        self._add_slider(
+            parent, "ParagraphPlanningMaxMs", "Paragraph Planning Max (ms)",
+            2000, 15000, "Maximum pause before starting a new paragraph"
+        )
+        self._add_slider(
+            parent, "CompositionSensitivity", "Composition Sensitivity",
+            0, 100, "Scale for content-aware pauses (50 = normal)"
+        )
 
         self._add_section(parent, "Behavior Toggles")
         self._add_checkbox(
@@ -493,6 +534,10 @@ class SettingsWindow:
         self._add_checkbox(
             parent, "EnableBrainstormPauses",
             "Enable random 'brainstorm' pauses"
+        )
+        self._add_checkbox(
+            parent, "EnableCompositionPauses",
+            "Composition pauses — content-aware drafting hesitation (replaces random brainstorm)"
         )
         self._add_checkbox(
             parent, "UseEnterOnly",
