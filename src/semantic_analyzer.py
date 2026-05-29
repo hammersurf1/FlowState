@@ -2,15 +2,17 @@
 FlowState — SemanticAnalyzer
 Produces per-token and per-chunk metadata using spaCy.
 Synonyms are found via WordNet (NLTK), with filtered vector fallback.
+Context-aware smart revisions use Lesk WSD plus local vector fit scoring.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Tuple
 
 import numpy as np
 import spacy
+from spacy.tokens import Doc
 
 
 _POS_TO_WORDNET = {
@@ -20,10 +22,14 @@ _POS_TO_WORDNET = {
     "ADV": "r",
 }
 
+_CONTEXT_WINDOW = 3
+_DEFAULT_MIN_FIT = 0.97
+
 
 @dataclass(frozen=True)
 class TokenMeta:
     """Per-token typing metadata."""
+    idx: int                      # spaCy token index in the parsed Doc
     text: str                     # Original surface text (includes trailing space if token.has_space)
     pos: str                      # Universal POS tag
     dep: str                      # Dependency relation
@@ -53,6 +59,7 @@ class SemanticAnalyzer:
             ) from exc
 
         self._synonym_cache: dict[tuple[str, str], list[str]] = {}
+        self._context_synonym_cache: dict[tuple[str, str, tuple[str, ...]], list[str]] = {}
         self._wordnet_ready = False
 
     def _ensure_wordnet(self) -> bool:
@@ -74,10 +81,11 @@ class SemanticAnalyzer:
         self._wordnet_ready = True
         return True
 
-    def analyze(self, text: str) -> List[TokenMeta]:
-        """Parse *text* and return a list of TokenMeta, one per spaCy token."""
-        doc = self.nlp(text)
+    def analyze(self, text: str) -> Tuple[List[TokenMeta], Doc]:
+        """Parse *text* and return TokenMeta list plus the spaCy Doc."""
+        return self._build_metas(self.nlp(text))
 
+    def _build_metas(self, doc: Doc) -> Tuple[List[TokenMeta], Doc]:
         chunk_tokens: Set[int] = set()
         chunk_end_tokens: Set[int] = set()
         for chunk in doc.noun_chunks:
@@ -100,6 +108,7 @@ class SemanticAnalyzer:
                     is_clause_boundary = True
 
             metas.append(TokenMeta(
+                idx=token.i,
                 text=token.text_with_ws,
                 pos=token.pos_,
                 dep=token.dep_,
@@ -112,7 +121,7 @@ class SemanticAnalyzer:
                 clause_boundary=is_clause_boundary,
             ))
 
-        return metas
+        return metas, doc
 
     @staticmethod
     def _match_case(source: str, candidate: str) -> str:
@@ -149,6 +158,47 @@ class SemanticAnalyzer:
         if expected_pos == "ADJ" and actual in ("ADJ", "NOUN"):
             return True
         return False
+
+    def _disambiguated_synset(self, token_text: str, pos: str, context_words: List[str]):
+        if not self._ensure_wordnet():
+            return None
+
+        from nltk.corpus import wordnet as wn
+        from nltk.wsd import lesk
+
+        wn_pos = _POS_TO_WORDNET.get(pos)
+        if not wn_pos:
+            return None
+
+        synset = lesk(context_words, token_text.lower(), pos=wn_pos)
+        if synset is None and pos == "ADJ":
+            synset = lesk(context_words, token_text.lower(), pos="s")
+        if synset is None:
+            synsets = wn.synsets(token_text.lower(), pos=wn_pos)
+            if not synsets and pos == "ADJ":
+                synsets = wn.synsets(token_text.lower(), pos="s")
+            synset = synsets[0] if synsets else None
+        return synset
+
+    def _wordnet_candidates_from_synset(
+        self, token_text: str, synset, max_results: int
+    ) -> List[str]:
+        seen: set[str] = set()
+        candidates: list[str] = []
+
+        for lemma in synset.lemmas():
+            raw = lemma.name().replace("_", " ")
+            if not self._is_valid_candidate(token_text, raw):
+                continue
+            key = raw.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(self._match_case(token_text, raw))
+            if len(candidates) >= max_results:
+                break
+
+        return candidates
 
     def _wordnet_candidates(self, token_text: str, pos: str, max_results: int) -> List[str]:
         if not self._ensure_wordnet():
@@ -207,8 +257,129 @@ class SemanticAnalyzer:
 
         return candidates
 
+    def _context_fingerprint(self, doc: Doc, token_idx: int) -> tuple[str, ...]:
+        start = max(0, token_idx - _CONTEXT_WINDOW)
+        end = min(len(doc), token_idx + _CONTEXT_WINDOW + 1)
+        return tuple(doc[i].lemma_.lower() for i in range(start, end) if doc[i].is_alpha)
+
+    def _token_vector(self, word: str) -> Optional[np.ndarray]:
+        lexeme = self.nlp.vocab[word.lower()]
+        if not lexeme.has_vector:
+            return None
+        return lexeme.vector
+
+    def _window_vector(
+        self, doc: Doc, token_idx: int, substitute: Optional[str] = None
+    ) -> Optional[np.ndarray]:
+        start = max(0, token_idx - _CONTEXT_WINDOW)
+        end = min(len(doc), token_idx + _CONTEXT_WINDOW + 1)
+        vecs: list[np.ndarray] = []
+        for i in range(start, end):
+            if i == token_idx and substitute is not None:
+                vec = self._token_vector(substitute)
+            elif doc[i].has_vector:
+                vec = doc[i].vector
+            else:
+                vec = None
+            if vec is not None:
+                vecs.append(vec)
+        if not vecs:
+            return None
+        return np.mean(vecs, axis=0)
+
+    @staticmethod
+    def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+        norm_a = np.linalg.norm(a)
+        norm_b = np.linalg.norm(b)
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return float(np.dot(a, b) / (norm_a * norm_b))
+
+    def _collocation_fit(self, doc: Doc, token_idx: int, substitute: str) -> float:
+        token = doc[token_idx]
+        prep = doc[token_idx - 1].text if token_idx > 0 and doc[token_idx - 1].is_alpha else ""
+        follow = doc[token_idx + 1].text if token_idx + 1 < len(doc) and doc[token_idx + 1].is_alpha else ""
+        if not follow:
+            return 1.0
+
+        orig_phrase = " ".join(part for part in (prep, token.text, follow) if part)
+        sub_phrase = " ".join(
+            part for part in (prep, self._match_case(token.text, substitute), follow) if part
+        )
+        orig_doc = self.nlp(orig_phrase)
+        sub_doc = self.nlp(sub_phrase)
+        if not orig_doc.has_vector or not sub_doc.has_vector:
+            return 1.0
+        return self._cosine_similarity(orig_doc.vector, sub_doc.vector)
+
+    def _contextual_fit(self, doc: Doc, token_idx: int, substitute: str) -> float:
+        window_fit = self._window_fit(doc, token_idx, substitute)
+        if token_idx + 1 < len(doc) and doc[token_idx + 1].is_alpha:
+            return min(window_fit, self._collocation_fit(doc, token_idx, substitute))
+        return window_fit
+
+    def _window_fit(self, doc: Doc, token_idx: int, substitute: str) -> float:
+        orig = self._window_vector(doc, token_idx)
+        sub = self._window_vector(doc, token_idx, substitute=substitute)
+        if orig is None or sub is None:
+            return 0.0
+        return self._cosine_similarity(orig, sub)
+
+    def contextual_synonym_candidates(
+        self,
+        doc: Doc,
+        token_idx: int,
+        max_results: int = 5,
+        min_fit: float = _DEFAULT_MIN_FIT,
+    ) -> List[str]:
+        """Return contextually valid synonym substitutes for smart revisions."""
+        token = doc[token_idx]
+        token_text = token.text
+        pos = token.pos_
+
+        cache_key = (token_text.lower(), pos, self._context_fingerprint(doc, token_idx))
+        if cache_key in self._context_synonym_cache:
+            return [self._match_case(token_text, c) for c in self._context_synonym_cache[cache_key]]
+
+        context_words = [t.text for t in doc if t.is_alpha]
+        pool_size = max(max_results * 3, 10)
+
+        raw_candidates: list[str] = []
+        seen: set[str] = set()
+
+        synset = self._disambiguated_synset(token_text, pos, context_words)
+        if synset is not None:
+            for cand in self._wordnet_candidates_from_synset(token_text, synset, pool_size):
+                key = cand.lower()
+                if key not in seen:
+                    seen.add(key)
+                    raw_candidates.append(cand)
+
+        for cand in self._wordnet_candidates(token_text, pos, pool_size):
+            key = cand.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            raw_candidates.append(cand)
+            if len(raw_candidates) >= pool_size:
+                break
+
+        if not raw_candidates:
+            raw_candidates = self._vector_candidates(token_text, pos, pool_size)
+
+        scored: list[tuple[float, str]] = []
+        for cand in raw_candidates:
+            fit = self._contextual_fit(doc, token_idx, cand)
+            if fit >= min_fit:
+                scored.append((fit, cand))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        stored = [c.lower() for _, c in scored[:max_results]]
+        self._context_synonym_cache[cache_key] = stored
+        return [self._match_case(token_text, c) for c in stored]
+
     def synonym_candidates(self, token_text: str, pos: str, max_results: int = 5) -> List[str]:
-        """Return plausible synonym substitutes for smart revisions."""
+        """Return plausible synonym substitutes (word-only, no context)."""
         cache_key = (token_text.lower(), pos)
         if cache_key in self._synonym_cache:
             return [self._match_case(token_text, c) for c in self._synonym_cache[cache_key]]
@@ -217,7 +388,6 @@ class SemanticAnalyzer:
         if not raw_candidates:
             raw_candidates = self._vector_candidates(token_text, pos, max_results)
 
-        # Store lowercase forms; apply surface capitalization on read.
         stored = [c.lower() for c in raw_candidates]
         self._synonym_cache[cache_key] = stored
         return [self._match_case(token_text, c) for c in stored]

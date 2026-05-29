@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from semantic_analyzer import SemanticAnalyzer, TokenMeta
+from spacy.tokens import Doc
 
 _REVISION_POS = ("NOUN", "VERB", "ADJ", "ADV")
 RevisionSpan = Tuple[int, int, str]  # (start, end, wrong_word)
@@ -39,7 +40,7 @@ class TypingPlanner:
 
     def plan(self, text: str, mean_delay: int, variance: int) -> List[TypingDirective]:
         """Return directives for the engine."""
-        metas = self.analyzer.analyze(text)
+        metas, doc = self.analyzer.analyze(text)
         directives: List[TypingDirective] = []
 
         i = 0
@@ -69,7 +70,7 @@ class TypingPlanner:
                     typo_chance=0,
                     typo_chance_adjustment=self._typo_adjustment(max_rank),
                     revision_candidate=None,
-                    revision_span=self._pick_chunk_revision(chunk_text, chunk_metas),
+                    revision_span=self._pick_chunk_revision(chunk_text, chunk_metas, doc),
                     pause_after_ms=self._clause_pause_ms(any_clause),
                     is_entity=is_ent,
                     chunk_burst=True,
@@ -77,7 +78,7 @@ class TypingPlanner:
                 i = j + 1
                 continue
 
-            rev_cand = self._pick_revision(meta)
+            rev_cand = self._pick_revision(meta, doc)
 
             directives.append(TypingDirective(
                 text=meta.text,
@@ -103,36 +104,46 @@ class TypingPlanner:
             return False
         return meta.text.strip().isalpha()
 
-    def _pick_revision_word(self, meta: TokenMeta) -> Optional[str]:
-        word = meta.text.strip()
-        cands = self.analyzer.synonym_candidates(word, meta.pos, max_results=5)
-        return random.choice(cands) if cands else None
+    @staticmethod
+    def _weighted_pick(candidates: List[str]) -> Optional[str]:
+        if not candidates:
+            return None
+        top = candidates[:3]
+        weights = list(range(len(top), 0, -1))
+        return random.choices(top, weights=weights, k=1)[0]
 
-    def _pick_revision(self, meta: TokenMeta) -> Optional[str]:
+    def _pick_revision_word(self, meta: TokenMeta, doc: Doc) -> Optional[str]:
+        cands = self.analyzer.contextual_synonym_candidates(doc, meta.idx, max_results=5)
+        return self._weighted_pick(cands)
+
+    def _pick_revision(self, meta: TokenMeta, doc: Doc) -> Optional[str]:
         if not self._is_revision_eligible(meta):
             return None
-        return self._pick_revision_word(meta)
+        return self._pick_revision_word(meta, doc)
 
-    def _pick_chunk_revision(self, chunk_text: str, chunk_metas: List[TokenMeta]) -> Optional[RevisionSpan]:
+    def _pick_chunk_revision(
+        self, chunk_text: str, chunk_metas: List[TokenMeta], doc: Doc
+    ) -> Optional[RevisionSpan]:
         eligible = [m for m in chunk_metas if self._is_revision_eligible(m)]
         if not eligible:
             return None
 
-        meta = random.choice(eligible)
-        wrong = self._pick_revision_word(meta)
-        if not wrong:
-            return None
+        random.shuffle(eligible)
+        for meta in eligible:
+            wrong = self._pick_revision_word(meta, doc)
+            if not wrong:
+                continue
 
-        offset = 0
-        for m in chunk_metas:
-            token_text = m.text
-            if m is meta:
-                ws_prefix = len(token_text) - len(token_text.lstrip())
-                word = token_text.strip()
-                start = offset + ws_prefix
-                end = start + len(word)
-                return (start, end, wrong)
-            offset += len(token_text)
+            offset = 0
+            for m in chunk_metas:
+                token_text = m.text
+                if m is meta:
+                    ws_prefix = len(token_text) - len(token_text.lstrip())
+                    word = token_text.strip()
+                    start = offset + ws_prefix
+                    end = start + len(word)
+                    return (start, end, wrong)
+                offset += len(token_text)
 
         return None
 

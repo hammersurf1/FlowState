@@ -8,7 +8,7 @@ def analyzer():
 
 
 def test_analyze_tokens(analyzer):
-    metas = analyzer.analyze("Alice works at Google in New York.")
+    metas, doc = analyzer.analyze("Alice works at Google in New York.")
     texts = [m.text.strip() for m in metas]
     assert texts == ["Alice", "works", "at", "Google", "in", "New", "York", "."]
 
@@ -21,6 +21,8 @@ def test_analyze_tokens(analyzer):
 
     assert metas[1].pos == "VERB"
     assert metas[3].pos == "PROPN"
+    assert metas[0].idx == 0
+    assert len(doc) == len(metas)
 
 
 def test_synonym_candidates_verb(analyzer):
@@ -49,3 +51,37 @@ def test_synonym_capitalization(analyzer):
     syns = analyzer.synonym_candidates("Important", "ADJ")
     assert syns
     assert all(s[0].isupper() for s in syns)
+
+
+def test_contextual_explore_rejects_search(analyzer):
+    text = (
+        "In Andy Weir's novel, Weir uses the friendship to explore "
+        "how friendship can lead to growth and challenges."
+    )
+    _, doc = analyzer.analyze(text)
+    explore_idx = next(i for i, t in enumerate(doc) if t.text.lower() == "explore")
+    syns = analyzer.contextual_synonym_candidates(doc, explore_idx)
+    assert "search" not in [s.lower() for s in syns]
+
+
+def test_contextual_important_accepts_near_synonym(analyzer):
+    text = "The government must implement important reforms for society."
+    _, doc = analyzer.analyze(text)
+    important_idx = next(i for i, t in enumerate(doc) if t.text.lower() == "important")
+    syns = analyzer.contextual_synonym_candidates(doc, important_idx)
+    assert syns
+    assert any(s.lower() in {"significant", "crucial", "vital", "essential"} for s in syns)
+
+
+def test_contextual_fit_scores_sorted(analyzer):
+    text = "The government must implement important reforms for society."
+    _, doc = analyzer.analyze(text)
+    important_idx = next(i for i, t in enumerate(doc) if t.text.lower() == "important")
+    syns = analyzer.contextual_synonym_candidates(doc, important_idx)
+    assert syns
+
+    fits = [
+        analyzer._contextual_fit(doc, important_idx, syn)
+        for syn in syns
+    ]
+    assert fits == sorted(fits, reverse=True)
