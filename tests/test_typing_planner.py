@@ -17,6 +17,17 @@ def test_chunk_burst(planner):
     assert "the quarterly results" in "".join(d.text for d in chunk_directives)
 
 
+def test_chunk_burst_per_char_profiles_vary(planner):
+    directives = planner.plan("the quarterly results were good.", 110, 45)
+    chunk = next(d for d in directives if d.chunk_burst)
+    assert chunk.chunk_char_jitter is not None
+    assert chunk.chunk_char_rank_mult is not None
+    assert len(chunk.chunk_char_jitter) == len(chunk.text)
+    assert len(chunk.chunk_char_rank_mult) == len(chunk.text)
+    assert len(set(chunk.chunk_char_jitter)) > 1
+    assert min(chunk.chunk_char_jitter) < max(chunk.chunk_char_jitter)
+
+
 def test_entity_flag(planner):
     directives = planner.plan("Alice visited Paris.", 50, 30)
     entity_dirs = [d for d in directives if d.is_entity]
@@ -93,3 +104,92 @@ def test_composition_deterministic(planner):
     first = planner.plan(text, 50, 30, composition=comp)
     second = planner.plan(text, 50, 30, composition=comp)
     assert [d.pause_before_ms for d in first] == [d.pause_before_ms for d in second]
+    assert [d.pause_after_ms for d in first] == [d.pause_after_ms for d in second]
+
+
+def test_composition_skips_blank_line_gap(planner):
+    text = "First paragraph here.\n\n\nSecond paragraph starts."
+    comp = _composition_settings(sensitivity=100)
+    directives = planner.plan(text, 50, 30, composition=comp)
+    newline_dirs = [d for d in directives if "\n" in d.text and not d.text.strip().isalpha()]
+    assert all(d.pause_before_ms == 0 and d.pause_after_ms == 0 for d in newline_dirs)
+    planning = [d for d in directives if d.pause_before_ms >= comp.paragraph_planning_min_ms]
+    assert len(planning) == 1
+    assert planning[0].text.strip().startswith("Second")
+
+
+def test_composition_tier_ordering(planner):
+    text = "One two three. Four five six.\n\nSeven eight nine."
+    comp = _composition_settings(
+        pause_min_ms=1000,
+        pause_max_ms=10000,
+        sensitivity=100,
+    )
+    directives = planner.plan(text, 50, 30, composition=comp)
+
+    two = next(d for d in directives if d.text.strip() == "two")
+    period_pauses = [
+        d.pause_after_ms for d in directives
+        if d.text.strip() == "." and d.pause_after_ms > 0
+    ]
+
+    assert two.pause_before_ms == 0
+    assert len(period_pauses) >= 2
+    assert period_pauses[0] < period_pauses[-1]
+
+
+def test_composition_variation(planner):
+    text = "Alpha beta gamma. Delta epsilon zeta."
+    comp = _composition_settings(pause_min_ms=1000, pause_max_ms=10000, sensitivity=100)
+    directives = planner.plan(text, 50, 30, composition=comp)
+    ends = [d.pause_after_ms for d in directives if d.pause_after_ms > 0]
+    assert len(ends) >= 2
+    assert len(set(ends)) > 1
+
+
+def test_composition_mid_only_on_content(planner):
+    text = "The cat sat. The dog ran."
+    comp = _composition_settings()
+    directives = planner.plan(text, 50, 30, composition=comp)
+    sat = next(d for d in directives if d.text.strip() == "sat")
+    ran = next(d for d in directives if d.text.strip() == "ran")
+    assert sat.pause_before_ms == 0
+    assert ran.pause_before_ms == 0
+
+
+def _essay_composition_settings():
+    return CompositionSettings(
+        enabled=True,
+        sensitivity=65,
+        pause_min_ms=1500,
+        pause_max_ms=22000,
+        paragraph_planning_min_ms=12000,
+        paragraph_planning_max_ms=45000,
+    )
+
+
+def _estimate_typing_ms(directives, mean_delay_ms: int) -> int:
+    total = 0
+    for d in directives:
+        total += d.pause_before_ms + d.pause_after_ms
+        total += int(len(d.text) * mean_delay_ms * d.delay_multiplier)
+    return total
+
+
+def test_composition_essay_calibration_duration(planner):
+    para = (
+        "Climate policy requires careful analysis of economic trade-offs, "
+        "environmental outcomes, and political feasibility across regions. "
+        "Scholars debate whether carbon pricing alone can redirect investment "
+        "toward renewable infrastructure without triggering regressive burdens "
+        "on households that already face rising energy costs. Empirical studies "
+        "often emphasize institutional capacity, administrative transparency, "
+        "and the credibility of enforcement mechanisms when projecting long-term "
+        "emissions reductions under uncertain technological change. "
+    )
+    essay = (para * 2 + "\n\n") * 4
+    mean_delay = 115
+    comp = _essay_composition_settings()
+    directives = planner.plan(essay, mean_delay, 55, composition=comp)
+    estimated_ms = _estimate_typing_ms(directives, mean_delay)
+    assert 30 * 60 * 1000 <= estimated_ms <= 50 * 60 * 1000

@@ -50,7 +50,9 @@ class TokenMeta:
     chunk_end: bool               # True if this token is the last token of its noun chunk
     clause_boundary: bool         # True if token ends a subordinate clause
     sentence_start: bool = False  # First token of a spaCy sentence
+    sentence_end: bool = False      # Last token of a spaCy sentence
     paragraph_start: bool = False   # First token after a blank line or start of doc
+    paragraph_end: bool = False     # Last content token before a paragraph break or doc end
     is_discourse_marker: bool = False  # Sentence-initial discourse connective
     is_hard_word: bool = False      # Uncommon vocabulary (rank above threshold)
 
@@ -99,16 +101,63 @@ class SemanticAnalyzer:
         return self._build_metas(self.nlp(text))
 
     @staticmethod
+    def _token_has_content(token) -> bool:
+        return not token.is_space and bool(token.text.strip())
+
+    @staticmethod
+    def _is_sentence_end_token(token, sentence_ends: Set[int]) -> bool:
+        if token.i not in sentence_ends:
+            return False
+        if SemanticAnalyzer._token_has_content(token):
+            stripped = token.text.strip()
+            if stripped in ".?!":
+                return True
+            if any(ch.isalnum() for ch in stripped):
+                return True
+        return False
+
+    @staticmethod
     def _paragraph_start_indices(doc: Doc) -> Set[int]:
-        """Token indices that begin a paragraph (after blank line or doc start)."""
-        starts: Set[int] = {0} if len(doc) else set()
-        for match in re.finditer(r"\n\n\s*", doc.text):
-            char_pos = match.end()
+        """Token indices that begin a content paragraph (not blank-line-only gaps)."""
+        if not len(doc) or not doc.text.strip():
+            return set()
+
+        starts: Set[int] = {0}
+        text = doc.text
+        for match in re.finditer(r"\n\n+", text):
+            before = text[: match.start()]
+            after = text[match.end() :]
+            if not before.strip() or not after.strip():
+                continue
+            char_pos = match.end() + (len(after) - len(after.lstrip()))
             for token in doc:
-                if token.idx >= char_pos:
+                if token.idx >= char_pos and SemanticAnalyzer._token_has_content(token):
                     starts.add(token.i)
                     break
         return starts
+
+    @staticmethod
+    def _last_content_token_before(doc: Doc, token_idx: int) -> int | None:
+        for i in range(token_idx - 1, -1, -1):
+            if SemanticAnalyzer._token_has_content(doc[i]):
+                return i
+        return None
+
+    @staticmethod
+    def _paragraph_end_indices(doc: Doc, paragraph_starts: Set[int]) -> Set[int]:
+        """Token indices that end a content paragraph (last content token before a break)."""
+        ends: Set[int] = set()
+        for start_idx in sorted(paragraph_starts):
+            if start_idx == 0:
+                continue
+            end_idx = SemanticAnalyzer._last_content_token_before(doc, start_idx)
+            if end_idx is not None:
+                ends.add(end_idx)
+        if len(doc):
+            end_idx = SemanticAnalyzer._last_content_token_before(doc, len(doc))
+            if end_idx is not None:
+                ends.add(end_idx)
+        return ends
 
     def _build_metas(self, doc: Doc) -> Tuple[List[TokenMeta], Doc]:
         chunk_tokens: Set[int] = set()
@@ -124,7 +173,9 @@ class SemanticAnalyzer:
                 entity_tokens[idx] = ent.label_
 
         sentence_starts = {sent.start for sent in doc.sents}
+        sentence_ends = {sent.end - 1 for sent in doc.sents}
         paragraph_starts = self._paragraph_start_indices(doc)
+        paragraph_ends = self._paragraph_end_indices(doc, paragraph_starts)
 
         metas: List[TokenMeta] = []
         for token in doc:
@@ -156,7 +207,9 @@ class SemanticAnalyzer:
                 chunk_end=token.i in chunk_end_tokens,
                 clause_boundary=is_clause_boundary,
                 sentence_start=is_sentence_start,
+                sentence_end=SemanticAnalyzer._is_sentence_end_token(token, sentence_ends),
                 paragraph_start=token.i in paragraph_starts,
+                paragraph_end=token.i in paragraph_ends,
                 is_discourse_marker=is_discourse,
                 is_hard_word=rank > _HARD_WORD_RANK,
             ))

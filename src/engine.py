@@ -744,11 +744,7 @@ class TypingEngine:
 
     def _directive_timing(self, directive):
         """Compute mean delay and variance for a directive."""
-        effective_variance = (
-            self.settings["UserVariance"] // 2
-            if (self.settings["EnableChunkBurst"] and directive.chunk_burst)
-            else self.settings["UserVariance"]
-        )
+        effective_variance = self.settings["UserVariance"]
 
         effective_typo_chance = self.settings["TypoChance"]
         if self.settings["EnableEntityCare"] and directive.is_entity:
@@ -818,10 +814,13 @@ class TypingEngine:
 
             self._human_keystroke(char)
 
-            if directive.momentum_boost and self.current_momentum < 15:
-                self.current_momentum += 0.5
+            if directive.chunk_burst:
+                self._advance_chunk_momentum(char)
+            else:
+                self._advance_momentum(directive.momentum_boost)
 
-            calc_mean = mean - self.current_momentum
+            calc_mean = self._char_typing_mean(directive, mean, idx, start_idx)
+            calc_mean -= self.current_momentum
             next_char = text[idx + 1] if idx + 1 < end_idx else ""
             bigram = (char + next_char).lower()
             if bigram in ["th", "he", "in", "er", "an", "re", "on", "at", "en",
@@ -835,9 +834,13 @@ class TypingEngine:
             if self.settings["EnableNumberSymbolCare"] and self._in_number_symbol_run:
                 calc_mean = int(calc_mean * 1.35)
 
-            delay = self._gaussian(calc_mean, effective_variance)
-            delay = max(10, min(delay, 250))
+            variance = effective_variance
+            if directive.chunk_burst:
+                variance = self._chunk_burst_variance(effective_variance)
+            delay = self._sample_inter_key_delay_ms(calc_mean, variance)
             self._sleep(delay / 1000.0)
+            if directive.chunk_burst and char == " ":
+                self._sleep(random.uniform(25, 110) / 1000.0)
             idx += 1
 
     def _do_word_revision(self, wrong: str, right: str):
@@ -902,13 +905,23 @@ class TypingEngine:
                     mean, effective_variance, effective_typo_chance,
                 )
 
-            if self.settings["EnableClausePauses"] and directive.pause_after_ms:
+            if directive.pause_after_ms and (
+                self.settings["EnableCompositionPauses"]
+                or self.settings["EnableClausePauses"]
+            ):
                 self._sleep(directive.pause_after_ms / 1000.0)
                 self.current_momentum = max(0, self.current_momentum - 3)
 
             stripped = directive.text.rstrip()
+            composition_boundaries = self.settings["EnableCompositionPauses"]
             if stripped and stripped[-1] in [".", "?", "!"]:
-                self._sleep(random.randint(self.settings["SentencePauseMs"], self.settings["SentencePauseMs"] + 400) / 1000.0)
+                if not composition_boundaries:
+                    self._sleep(
+                        random.randint(
+                            self.settings["SentencePauseMs"],
+                            self.settings["SentencePauseMs"] + 400,
+                        ) / 1000.0
+                    )
                 self.current_momentum = 0
                 self._in_number_symbol_run = False
             elif stripped and stripped[-1] in [",", ";"]:
@@ -919,7 +932,13 @@ class TypingEngine:
                     self.driver.send_enter()
                 else:
                     self.driver.send_shift_enter()
-                self._sleep(random.randint(self.settings["ParagraphPauseMs"], self.settings["ParagraphPauseMs"] + 1000) / 1000.0)
+                if not composition_boundaries:
+                    self._sleep(
+                        random.randint(
+                            self.settings["ParagraphPauseMs"],
+                            self.settings["ParagraphPauseMs"] + 1000,
+                        ) / 1000.0
+                    )
                 self.current_momentum = 0
                 self._in_number_symbol_run = False
 
@@ -1146,8 +1165,7 @@ class TypingEngine:
                     self._sleep(random.randint(50, 100) / 1000.0)
                 else:
                     self._human_keystroke(char)
-                    if self.current_momentum < 15:
-                        self.current_momentum += 0.5
+                    self._advance_momentum(True)
 
                 calc_mean = self.settings["UserMeanDelay"] - self.current_momentum
                 bigram = (char + next_char).lower()
@@ -1175,8 +1193,7 @@ class TypingEngine:
                     if not self._fluent_state:
                         effective_variance = int(effective_variance * 1.7)
 
-                final_delay = self._gaussian(calc_mean, effective_variance)
-                final_delay = max(10, min(final_delay, 250))
+                final_delay = self._sample_inter_key_delay_ms(calc_mean, effective_variance)
                 self._sleep(final_delay / 1000.0)
 
                 i += 1
@@ -1268,6 +1285,57 @@ class TypingEngine:
             choices = map_to_use[char]
             return random.choice(choices)
         return None
+
+    def _advance_momentum(self, enabled):
+        """Ramp typing speed within a word/chunk with irregular steps and occasional resets."""
+        if not enabled:
+            return
+        if self.current_momentum < 15:
+            self.current_momentum += random.uniform(0.2, 0.7)
+        if random.random() < 0.04:
+            self.current_momentum = random.uniform(0, min(self.current_momentum, 9))
+
+    def _advance_chunk_momentum(self, char):
+        """Irregular speed within a noun chunk — reset at word boundaries, not a steady ramp."""
+        if char.isspace():
+            self.current_momentum = random.uniform(0, 6)
+            return
+        if random.random() < 0.14:
+            self.current_momentum = max(0, self.current_momentum - random.uniform(1.5, 6))
+        elif self.current_momentum < 13:
+            self.current_momentum += random.uniform(0.05, 0.55)
+        if random.random() < 0.06:
+            self.current_momentum = random.uniform(0, 8)
+
+    def _char_typing_mean(self, directive, fallback_mean, idx, start_idx):
+        if not directive.chunk_burst or not directive.chunk_char_jitter:
+            return fallback_mean
+        rel = idx - start_idx
+        if rel < 0 or rel >= len(directive.chunk_char_jitter):
+            return fallback_mean
+        base = self.settings["UserMeanDelay"]
+        jitter = directive.chunk_char_jitter[rel]
+        if self.settings["EnableSemanticSpeed"] and directive.chunk_char_rank_mult:
+            rank = directive.chunk_char_rank_mult[rel]
+            return max(10.0, base * rank * jitter)
+        return max(10.0, base * jitter)
+
+    @staticmethod
+    def _chunk_burst_variance(base_variance):
+        return max(10, int(base_variance * random.uniform(0.88, 1.22)))
+
+    def _sample_inter_key_delay_ms(self, calc_mean, variance):
+        """Sample an inter-key interval with enough spread to avoid uniform rhythm detectors."""
+        mean = max(10.0, float(calc_mean))
+        std = max(8.0, float(variance))
+        delay = random.gauss(mean, std)
+        if random.random() < 0.14:
+            delay = max(delay, random.gauss(mean * 1.2, std * 1.35))
+        delay *= random.uniform(0.80, 1.22)
+        if random.random() < 0.03:
+            delay += random.uniform(70, 420)
+        cap = max(380.0, mean * 2.8)
+        return max(8.0, min(delay, cap))
 
     def _gaussian(self, mean, stddev):
         val = int(random.gauss(mean, stddev))

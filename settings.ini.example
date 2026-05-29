@@ -32,10 +32,10 @@ brainstormfrequency = 60
 # Pause after typing an emoji (milliseconds)
 emojipausems = 1800
 
-# Minimum content-aware hesitation before a word or phrase (milliseconds)
+# Minimum mid-sentence composition hesitation (milliseconds); sentence/paragraph ends use higher bands within max
 compositionpauseminms = 300
 
-# Maximum pre-typing composition pause (milliseconds)
+# Maximum composition pause at paragraph ends (milliseconds)
 compositionpausemaxms = 6000
 
 # Minimum pause before starting a new paragraph (milliseconds)

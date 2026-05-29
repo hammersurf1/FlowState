@@ -34,6 +34,29 @@ def test_paragraph_start_detection(analyzer):
     assert however.is_discourse_marker is True
 
 
+def test_blank_lines_are_not_paragraphs(analyzer):
+    text = "First paragraph here.\n\n\nSecond paragraph starts."
+    metas, _ = analyzer.analyze(text)
+    newline_directives = [m for m in metas if "\n" in m.text and not m.text.strip().isalpha()]
+    for meta in newline_directives:
+        assert not meta.paragraph_start, repr(meta.text)
+        assert not meta.paragraph_end, repr(meta.text)
+    second = next(m for m in metas if m.text.strip().startswith("Second"))
+    assert second.paragraph_start is True
+    first_period = next(m for m in metas if m.paragraph_end and m.text.strip() == ".")
+    assert first_period.paragraph_end is True
+
+
+def test_sentence_and_paragraph_end_flags(analyzer):
+    text = "First sentence ends. Second ends paragraph.\n\nNew paragraph starts."
+    metas, _ = analyzer.analyze(text)
+    mid_sentence_end = next(m for m in metas if m.sentence_end and not m.paragraph_end)
+    assert mid_sentence_end.sentence_end is True
+    assert mid_sentence_end.paragraph_end is False
+    para_end = next(m for m in metas if m.paragraph_end and m.text.strip() == ".")
+    assert para_end.paragraph_end is True
+
+
 def test_hard_word_flag(analyzer):
     metas, _ = analyzer.analyze("The government must implement significant reforms.")
     reforms = next(m for m in metas if m.text.strip() == "reforms")

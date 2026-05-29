@@ -8,14 +8,18 @@ from __future__ import annotations
 import hashlib
 import random
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 from semantic_analyzer import SemanticAnalyzer, TokenMeta
 from spacy.tokens import Doc
 
 _REVISION_POS = ("NOUN", "VERB", "ADJ", "ADV")
 RevisionSpan = Tuple[int, int, str]  # (start, end, wrong_word)
-_COMPOSITION_PAUSE_CAP_MS = 10_000
+_COMPOSITION_PAUSE_CAP_MS = 30_000
+
+CompositionTier = Literal[
+    "mid_sentence", "sentence_end", "paragraph_end", "paragraph_start",
+]
 
 
 @dataclass(frozen=True)
@@ -44,6 +48,8 @@ class TypingDirective:
     pause_after_ms: int = 0       # Extra pause after this directive finishes
     is_entity: bool = False
     chunk_burst: bool = False     # True if part of a noun chunk
+    chunk_char_jitter: Optional[Tuple[float, ...]] = None   # Per-char speed wobble (~1.0)
+    chunk_char_rank_mult: Optional[Tuple[float, ...]] = None  # Per-char rank multiplier
     composition_score: float = 0.0  # Relative composition difficulty (debug)
 
 
@@ -92,6 +98,7 @@ class TypingPlanner:
                 if chunk_metas[0].paragraph_start and directive_index > 0:
                     prior_paragraph_tokens = 0
 
+                chunk_jitter, chunk_rank = self._chunk_char_profiles(chunk_metas)
                 directives.append(TypingDirective(
                     text=chunk_text,
                     base_delay_ms=mean_delay,
@@ -105,6 +112,8 @@ class TypingPlanner:
                     pause_after_ms=self._clause_pause_ms(any_clause) + pause_after,
                     is_entity=is_ent,
                     chunk_burst=True,
+                    chunk_char_jitter=chunk_jitter,
+                    chunk_char_rank_mult=chunk_rank,
                     composition_score=score,
                 ))
                 prior_paragraph_tokens += len(chunk_metas)
@@ -157,53 +166,100 @@ class TypingPlanner:
         scale = max(0.0, min(2.0, comp.sensitivity / 50.0))
         score = 0.0
         before_ms = 0
+        after_ms = 0
 
-        primary = metas[0]
-        max_rank = max(m.rank for m in metas)
+        tier = self._position_tier(metas)
         any_hard = any(m.is_hard_word for m in metas)
-        any_entity = any(m.is_entity for m in metas)
 
-        if any_hard:
-            score += 0.35
-            before_ms += rng.randint(400, 1200)
-
-        if any_entity:
-            score += 0.15
-            before_ms += rng.randint(200, 600)
-
-        if primary.is_discourse_marker:
-            score += 0.25
-            before_ms += rng.randint(300, 800)
-
-        if primary.paragraph_start:
+        if tier == "paragraph_start":
             para_lo = comp.paragraph_planning_min_ms
             para_hi = comp.paragraph_planning_max_ms
             length_factor = min(1.0, prior_paragraph_tokens / 40.0)
             para_lo = int(para_lo + length_factor * (para_hi - para_lo) * 0.4)
             score += 0.5 + length_factor * 0.3
-            before_ms += rng.randint(para_lo, para_hi)
+            before_ms = self._sample_pause_ms(para_lo, para_hi, rng)
+            before_ms = self._scale_pause(
+                before_ms, scale, comp.paragraph_planning_max_ms,
+            )
 
-            if primary.sentence_start and any_hard:
-                score += 0.2
-                before_ms += rng.randint(500, 2000)
+        if tier == "mid_sentence":
+            content_score = self._content_trigger_score(metas, doc)
+            if content_score > 0:
+                score += content_score
+                lo, hi = self._tier_band_ms("mid_sentence", comp)
+                before_ms = self._sample_pause_ms(lo, hi, rng)
+                if any_hard:
+                    before_ms = int(before_ms * rng.uniform(1.0, 1.15))
+                before_ms = self._scale_pause(before_ms, scale, comp.pause_max_ms)
 
+        if tier == "paragraph_end":
+            score += 0.4
+            lo, hi = self._tier_band_ms("paragraph_end", comp)
+            after_ms = self._sample_pause_ms(lo, hi, rng)
+            after_ms = self._scale_pause(after_ms, scale, comp.pause_max_ms)
+        elif tier == "sentence_end":
+            score += 0.25
+            lo, hi = self._tier_band_ms("sentence_end", comp)
+            after_ms = self._sample_pause_ms(lo, hi, rng)
+            after_ms = self._scale_pause(after_ms, scale, comp.pause_max_ms)
+
+        return before_ms, after_ms, min(1.0, score)
+
+    @staticmethod
+    def _position_tier(metas: List[TokenMeta]) -> CompositionTier:
+        primary = metas[0]
+        terminal = metas[-1]
+        if primary.paragraph_start:
+            return "paragraph_start"
+        if terminal.paragraph_end:
+            return "paragraph_end"
+        if terminal.sentence_end:
+            return "sentence_end"
+        return "mid_sentence"
+
+    @staticmethod
+    def _tier_band_ms(tier: str, comp: CompositionSettings) -> Tuple[int, int]:
+        lo_setting = comp.pause_min_ms
+        hi_setting = comp.pause_max_ms
+        span = max(0, hi_setting - lo_setting)
+        if tier == "mid_sentence":
+            return lo_setting, int(lo_setting + 0.35 * span)
+        if tier == "sentence_end":
+            return int(lo_setting + 0.35 * span), int(lo_setting + 0.70 * span)
+        if tier == "paragraph_end":
+            return int(lo_setting + 0.70 * span), hi_setting
+        raise ValueError(f"unknown composition tier: {tier}")
+
+    @staticmethod
+    def _sample_pause_ms(lo: int, hi: int, rng: random.Random) -> int:
+        if hi <= lo:
+            return lo
+        return rng.randint(lo, hi)
+
+    @staticmethod
+    def _scale_pause(ms: int, scale: float, cap: int) -> int:
+        ms = int(ms * scale)
+        if ms <= 0:
+            return 0
+        effective_cap = max(_COMPOSITION_PAUSE_CAP_MS, cap)
+        return min(ms, effective_cap)
+
+    def _content_trigger_score(self, metas: List[TokenMeta], doc: Doc) -> float:
+        primary = metas[0]
+        score = 0.0
+        if any(m.is_hard_word for m in metas):
+            score += 0.35
+        if any(m.is_entity for m in metas):
+            score += 0.15
+        if primary.is_discourse_marker:
+            score += 0.25
         for meta in metas:
             if meta.text.strip().isalpha() and meta.pos in _REVISION_POS:
                 ambiguity = self.analyzer.synonym_ambiguity_score(doc, meta.idx)
                 if ambiguity > 0.3:
                     score += ambiguity * 0.3
-                    lo = int(500 + ambiguity * 500)
-                    hi = int(1000 + ambiguity * 500)
-                    before_ms += rng.randint(lo, hi)
                 break
-
-        before_ms = int(before_ms * scale)
-        if before_ms <= 0:
-            return 0, 0, min(1.0, score)
-        before_ms = max(comp.pause_min_ms, before_ms)
-        before_ms = min(before_ms, comp.pause_max_ms, _COMPOSITION_PAUSE_CAP_MS)
-
-        return before_ms, 0, min(1.0, score)
+        return score
 
     @staticmethod
     def _directive_rng(text: str, directive_index: int) -> random.Random:
@@ -259,6 +315,25 @@ class TypingPlanner:
                 offset += len(token_text)
 
         return None
+
+    @staticmethod
+    def _token_rng(meta: TokenMeta) -> random.Random:
+        digest = hashlib.md5(f"{meta.idx}:{meta.text}".encode()).hexdigest()
+        return random.Random(int(digest[:8], 16))
+
+    def _chunk_char_profiles(
+        self, chunk_metas: List[TokenMeta],
+    ) -> Tuple[Tuple[float, ...], Tuple[float, ...]]:
+        """Per-character jitter and rank multipliers (one entry per character in chunk text)."""
+        jitters: List[float] = []
+        ranks: List[float] = []
+        for meta in chunk_metas:
+            jitter = self._token_rng(meta).uniform(0.84, 1.22)
+            rank_mult = self._rank_multiplier(meta.rank)
+            n = len(meta.text)
+            jitters.extend([jitter] * n)
+            ranks.extend([rank_mult] * n)
+        return tuple(jitters), tuple(ranks)
 
     @staticmethod
     def _rank_multiplier(rank: int) -> float:
