@@ -111,7 +111,9 @@ If you prefer to run from source, or you want to inspect exactly what FlowState 
    cd FlowState
    ```
 
-2. **Run the setup script for your platform:**
+2. **Install [uv](https://docs.astral.sh/uv/getting-started/installation/)** if you don't have it yet.
+
+3. **Run the setup script for your platform:**
 
    **Windows:**
    ```sh
@@ -125,24 +127,27 @@ If you prefer to run from source, or you want to inspect exactly what FlowState 
    ```
 
    The setup scripts will:
-   - Check that Python 3 is installed
+   - Install Python 3.12 via uv (if needed)
    - Create a virtual environment in `.venv/`
-   - Install dependencies from the platform-specific requirements file
-   - Download the spaCy `en_core_web_md` model
-   - Print clear instructions for running the app
+   - Run `uv sync` to install dependencies from `pyproject.toml`
+   - Download the spaCy `en_core_web_md` model and NLTK WordNet corpora
 
-3. **Run FlowState:**
+4. **Run FlowState:**
 
    **Windows** (run as Administrator):
    ```sh
-   .venv\Scripts\activate
-   python src\main_win.py
+   uv run python src\main_win.py
    ```
 
    **macOS:**
    ```sh
-   source .venv/bin/activate
-   python3 src/main_mac.py
+   uv run python3 src/main_mac.py
+   ```
+
+   **Updating dependencies or models after pulling changes:**
+   ```sh
+   uv sync
+   uv run python scripts/download_models.py
    ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
@@ -217,7 +222,7 @@ FlowState uses **spaCy** with the `en_core_web_md` model to make typing feel gen
 
 | Feature | What it does |
 |---|---|
-| **Smart Revisions** | Occasionally types a semantically similar word first, hesitates, backspaces, and types the correct word. Only triggers on nouns, verbs, and adjectives. |
+| **Smart Revisions** | Occasionally types a WordNet synonym first, hesitates, backspaces, and types the correct word. Works on nouns, verbs, adjectives, and adverbs — including inside noun phrases. |
 | **Semantic Speed** | Adjusts typing speed based on word frequency. Common words (e.g., "the", "and") flow faster; rare words slow down slightly. |
 | **Entity Care** | Named entities (people, companies, places) are typed with extra care — fewer typos and steadier rhythm. |
 | **Clause Pauses** | Uses dependency parsing to insert micro-pauses at the end of subordinate clauses, not just at sentence boundaries. |

@@ -63,12 +63,6 @@ FINGER_MAPS = {
     }
 }
 
-COMMON_TYPOS = {
-    "the": ["teh"], "and": ["adn"], "that":["taht"], "because": ["becuase", "becaus"],
-    "definitely": ["definately"], "separate": ["seperate"], "a lot":["alot"],
-    "receive": ["recieve"], "their":["thier", "there"], "you're":["your"]
-}
-
 class ProfileManager:
     """Per-app profile manager — matches window titles to setting overrides."""
 
@@ -533,9 +527,8 @@ class TypingEngine:
                 if next_kind == "blank":
                     actions.append(KeyAction("Enter"))
                 elif next_kind == "paragraph":
-                    # Google Docs: Enter leaves empty list item, second exits list,
-                    # third creates the blank line before the next section header.
-                    actions.append(KeyAction("Enter"))
+                    # Google Docs: Enter on a non-empty item creates the empty item;
+                    # Enter again exits the list and keeps the cursor on that line.
                     actions.append(KeyAction("Enter"))
                     actions.append(KeyAction("Enter"))
                 else:
@@ -700,127 +693,173 @@ class TypingEngine:
         else:
             self._legacy_type_plain_text(clipboard_text, neighbor_map)
 
+    def _should_smart_revise(self, directive) -> bool:
+        if not self.settings["EnableSmartRevisions"]:
+            return False
+        if not directive.revision_candidate and not directive.revision_span:
+            return False
+        return random.randint(1, 100) <= self.settings["RevisionChance"]
+
+    def _directive_timing(self, directive):
+        """Compute mean delay and variance for a directive."""
+        effective_variance = (
+            self.settings["UserVariance"] // 2
+            if (self.settings["EnableChunkBurst"] and directive.chunk_burst)
+            else self.settings["UserVariance"]
+        )
+
+        effective_typo_chance = self.settings["TypoChance"]
+        if self.settings["EnableEntityCare"] and directive.is_entity:
+            effective_typo_chance = max(0, effective_typo_chance - 2)
+        if self.settings["EnableFrequencyTypos"]:
+            effective_typo_chance = max(0, effective_typo_chance + directive.typo_chance_adjustment)
+
+        if self.settings["EnableFluencyStates"]:
+            self._update_fluency_state()
+            effective_variance, effective_typo_chance = self._apply_fluency(
+                effective_variance, effective_typo_chance
+            )
+
+        mean = self.settings["UserMeanDelay"]
+        if self.settings["EnableSemanticSpeed"]:
+            mean = mean * directive.delay_multiplier
+        mean = max(10, mean)
+
+        return mean, effective_variance, effective_typo_chance
+
+    def _emit_directive_range(self, directive, neighbor_map, start_idx, end_idx, mean, effective_variance, effective_typo_chance):
+        """Type directive.text[start_idx:end_idx] with full motor/typo logic."""
+        text = directive.text
+        idx = start_idx
+        while idx < end_idx:
+            self._sleep(0)
+            char = text[idx]
+            char_code = ord(char)
+
+            if 0xD800 <= char_code <= 0xDBFF and idx + 1 < end_idx:
+                self._sleep(random.randint(self.settings["EmojiPauseMs"], self.settings["EmojiPauseMs"] + 500) / 1000.0)
+                self.driver.surgical_paste(text[idx:idx + 2])
+                self._sleep(self.settings["UserMeanDelay"] / 1000.0)
+                self.current_momentum = 0
+                self._in_number_symbol_run = False
+                idx += 2
+                continue
+            if char_code > 0xFFFF:
+                self._sleep(random.randint(self.settings["EmojiPauseMs"], self.settings["EmojiPauseMs"] + 500) / 1000.0)
+                self.driver.surgical_paste(char)
+                self._sleep(self.settings["UserMeanDelay"] / 1000.0)
+                self.current_momentum = 0
+                self._in_number_symbol_run = False
+                idx += 1
+                continue
+
+            if self.settings["EnableNumberSymbolCare"]:
+                if self._is_digit_or_symbol(char):
+                    if not self._in_number_symbol_run:
+                        self._in_number_symbol_run = True
+                else:
+                    self._in_number_symbol_run = False
+
+            local_typo_chance = effective_typo_chance
+            if self.settings["EnableNumberSymbolCare"] and self._in_number_symbol_run:
+                local_typo_chance = max(0, local_typo_chance - 5)
+
+            if (self.settings["EnableTypos"]
+                    and local_typo_chance > 0
+                    and char_code < 128
+                    and char not in [" ", "\n", "\t"]
+                    and random.randint(1, 100) <= local_typo_chance):
+                consumed = self._inject_typo(char, text[idx + 1:end_idx], neighbor_map)
+                if consumed:
+                    idx += consumed
+                    continue
+
+            self._human_keystroke(char)
+
+            if directive.momentum_boost and self.current_momentum < 15:
+                self.current_momentum += 0.5
+
+            calc_mean = mean - self.current_momentum
+            next_char = text[idx + 1] if idx + 1 < end_idx else ""
+            bigram = (char + next_char).lower()
+            if bigram in ["th", "he", "in", "er", "an", "re", "on", "at", "en",
+                          "nd", "ti", "es", "or", "te", "of", "ed", "is", "it",
+                          "al", "ar", "st", "to", "nt"]:
+                calc_mean -= 10
+
+            if self.settings["EnableFingerPenalty"]:
+                calc_mean += self._same_finger_penalty_ms(char, next_char)
+
+            if self.settings["EnableNumberSymbolCare"] and self._in_number_symbol_run:
+                calc_mean = int(calc_mean * 1.35)
+
+            delay = self._gaussian(calc_mean, effective_variance)
+            delay = max(10, min(delay, 250))
+            self._sleep(delay / 1000.0)
+            idx += 1
+
+    def _do_word_revision(self, wrong: str, right: str):
+        """Type wrong word, hesitate, backspace, type correct word."""
+        for c in wrong:
+            self._human_keystroke(c)
+            self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+
+        hesitate_lo = 500 + min(len(wrong), 12) * 30
+        hesitate_hi = hesitate_lo + 600
+        self._sleep(random.randint(hesitate_lo, hesitate_hi) / 1000.0)
+
+        for _ in range(len(wrong)):
+            self.driver.send_backspace()
+            self._sleep(random.randint(40, 70) / 1000.0)
+
+        self._sleep(random.randint(600, 1200) / 1000.0)
+        self.current_momentum = 0
+
+        for c in right:
+            self._human_keystroke(c)
+            calc_mean = self.settings["UserMeanDelay"] * 1.15
+            delay = self._gaussian(calc_mean, self.settings["UserVariance"])
+            self._sleep(max(10, delay) / 1000.0)
+
     def _execute_directives(self, directives, neighbor_map):
         """Typed-loop over directives instead of raw characters."""
         for directive in directives:
             self._sleep(0)
-
-            # --- SMART REVISION: type similar word, pause, backspace, type real word ---
-            if (self.settings["EnableSmartRevisions"]
-                    and directive.revision_candidate
-                    and random.randint(1, 100) <= self.settings["RevisionChance"]):
-                self._simulate_revision(directive, neighbor_map)
-                continue
-
-            # --- CHUNK BURST: lower variance inside noun chunks ---
-            effective_variance = (
-                self.settings["UserVariance"] // 2
-                if (self.settings["EnableChunkBurst"] and directive.chunk_burst)
-                else self.settings["UserVariance"]
-            )
-
-            # --- ENTITY CARE + FREQUENCY TYPO MODULATION ---
-            effective_typo_chance = self.settings["TypoChance"]
-            if self.settings["EnableEntityCare"] and directive.is_entity:
-                effective_typo_chance = max(0, effective_typo_chance - 2)
-            if self.settings["EnableFrequencyTypos"]:
-                effective_typo_chance = max(0, effective_typo_chance + directive.typo_chance_adjustment)
-
-            # --- FLUENCY STATE ---
-            if self.settings["EnableFluencyStates"]:
-                self._update_fluency_state()
-                effective_variance, effective_typo_chance = self._apply_fluency(effective_variance, effective_typo_chance)
-
-            # --- SPEED MODULATION: apply rank-based multiplier ---
-            mean = self.settings["UserMeanDelay"]
-            if self.settings["EnableSemanticSpeed"]:
-                mean = mean * directive.delay_multiplier
-            mean = max(10, mean)
-
-            # Emit characters in this directive (manual index — enumerate cannot skip)
+            mean, effective_variance, effective_typo_chance = self._directive_timing(directive)
             text = directive.text
-            idx = 0
-            while idx < len(text):
-                self._sleep(0)
-                char = text[idx]
+            text_len = len(text)
 
-                # Emoji / surrogate pair fast-path
-                char_code = ord(char)
-                if 0xD800 <= char_code <= 0xDBFF and idx + 1 < len(text):
-                    self._sleep(random.randint(self.settings["EmojiPauseMs"], self.settings["EmojiPauseMs"] + 500) / 1000.0)
-                    self.driver.surgical_paste(text[idx:idx + 2])
-                    self._sleep(self.settings["UserMeanDelay"] / 1000.0)
-                    self.current_momentum = 0
-                    self._in_number_symbol_run = False
-                    idx += 2
-                    continue
-                if char_code > 0xFFFF:
-                    self._sleep(random.randint(self.settings["EmojiPauseMs"], self.settings["EmojiPauseMs"] + 500) / 1000.0)
-                    self.driver.surgical_paste(char)
-                    self._sleep(self.settings["UserMeanDelay"] / 1000.0)
-                    self.current_momentum = 0
-                    self._in_number_symbol_run = False
-                    idx += 1
-                    continue
+            if self._should_smart_revise(directive):
+                if directive.revision_span:
+                    start, end, wrong = directive.revision_span
+                    right = text[start:end]
+                    self._emit_directive_range(
+                        directive, neighbor_map, 0, start,
+                        mean, effective_variance, effective_typo_chance,
+                    )
+                    self._do_word_revision(wrong, right)
+                    self._emit_directive_range(
+                        directive, neighbor_map, end, text_len,
+                        mean, effective_variance, effective_typo_chance,
+                    )
+                elif directive.revision_candidate:
+                    wrong = directive.revision_candidate
+                    right = text.strip()
+                    self._do_word_revision(wrong, right)
+                    trailing_ws = text[len(text.rstrip()):]
+                    for c in trailing_ws:
+                        self._human_keystroke(c)
+                        self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+            else:
+                self._emit_directive_range(
+                    directive, neighbor_map, 0, text_len,
+                    mean, effective_variance, effective_typo_chance,
+                )
 
-                # --- NUMBER / SYMBOL HANDLING ---
-                if self.settings["EnableNumberSymbolCare"]:
-                    if self._is_digit_or_symbol(char):
-                        if not self._in_number_symbol_run:
-                            self._in_number_symbol_run = True
-                    else:
-                        self._in_number_symbol_run = False
-
-                # Intra-directive typo logic — suppress typos on number/symbol runs
-                local_typo_chance = effective_typo_chance
-                if self.settings["EnableNumberSymbolCare"] and self._in_number_symbol_run:
-                    local_typo_chance = max(0, local_typo_chance - 5)
-
-                if (self.settings["EnableTypos"]
-                        and local_typo_chance > 0
-                        and char_code < 128
-                        and char not in [" ", "\n", "\t"]
-                        and random.randint(1, 100) <= local_typo_chance):
-                    consumed = self._inject_typo(char, text[idx + 1:], neighbor_map)
-                    if consumed:
-                        idx += consumed
-                        continue
-
-                # Normal keystroke
-                self._human_keystroke(char)
-
-                # Momentum
-                if directive.momentum_boost and self.current_momentum < 15:
-                    self.current_momentum += 0.5
-
-                # Delay calculation
-                calc_mean = mean - self.current_momentum
-                next_char = text[idx + 1] if idx + 1 < len(text) else ""
-                bigram = (char + next_char).lower()
-                if bigram in ["th", "he", "in", "er", "an", "re", "on", "at", "en",
-                              "nd", "ti", "es", "or", "te", "of", "ed", "is", "it",
-                              "al", "ar", "st", "to", "nt"]:
-                    calc_mean -= 10
-
-                # Same-finger bigram penalty / alternating-hand bonus
-                if self.settings["EnableFingerPenalty"]:
-                    calc_mean += self._same_finger_penalty_ms(char, next_char)
-
-                # Number / symbol run delay multiplier
-                if self.settings["EnableNumberSymbolCare"] and self._in_number_symbol_run:
-                    calc_mean = int(calc_mean * 1.35)
-
-                delay = self._gaussian(calc_mean, effective_variance)
-                delay = max(10, min(delay, 250))
-                self._sleep(delay / 1000.0)
-                idx += 1
-
-            # --- Pause after directive (clause boundaries, etc.) ---
             if self.settings["EnableClausePauses"] and directive.pause_after_ms:
                 self._sleep(directive.pause_after_ms / 1000.0)
                 self.current_momentum = max(0, self.current_momentum - 3)
 
-            # --- Sentence / paragraph boundary pauses ---
             stripped = directive.text.rstrip()
             if stripped and stripped[-1] in [".", "?", "!"]:
                 self._sleep(random.randint(self.settings["SentencePauseMs"], self.settings["SentencePauseMs"] + 400) / 1000.0)
@@ -838,40 +877,17 @@ class TypingEngine:
                 self.current_momentum = 0
                 self._in_number_symbol_run = False
 
-    def _simulate_revision(self, directive, neighbor_map):
-        """Type the similar candidate, hesitate, backspace, then type the real text."""
-        wrong = directive.revision_candidate
-        right = directive.text.strip()
-
-        # Type wrong word
-        for c in wrong:
-            self._human_keystroke(c)
-            self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
-
-        # Hesitation (the 'reconsideration' moment)
-        self._sleep(random.randint(500, 1100) / 1000.0)
-
-        # Backspace wrong word
-        for _ in range(len(wrong)):
-            self.driver.send_backspace()
-            self._sleep(random.randint(40, 70) / 1000.0)
-
-        # Pause before choosing correct word
-        self._sleep(random.randint(600, 1200) / 1000.0)
-        self.current_momentum = 0
-
-        # Type correct word with slightly more care (higher delay multiplier)
-        for c in right:
-            self._human_keystroke(c)
-            calc_mean = self.settings["UserMeanDelay"] * 1.15
-            delay = self._gaussian(calc_mean, self.settings["UserVariance"])
-            self._sleep(max(10, delay) / 1000.0)
-
-        # Re-inject trailing whitespace if directive had it
-        trailing_ws = directive.text[len(directive.text.rstrip()):]
-        for c in trailing_ws:
-            self._human_keystroke(c)
-            self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
+            if self.settings["EnableBrainstormPauses"]:
+                ends_with_space = directive.text.endswith(" ")
+                ends_with_sentence = stripped and stripped[-1] in [".", "?", "!", "\n"]
+                freq = self.settings["BrainstormFrequency"]
+                roll = random.randint(1, freq)
+                if ends_with_space and roll == 1:
+                    self._sleep(random.randint(1500, 4000) / 1000.0)
+                    self.current_momentum = 0
+                elif ends_with_sentence and roll <= 2:
+                    self._sleep(random.randint(1500, 4000) / 1000.0)
+                    self.current_momentum = 0
 
     def _inject_typo(self, char, remaining_text, neighbor_map):
         """Attempt a single-character typo. Returns chars consumed (0 = no typo)."""
@@ -952,7 +968,6 @@ class TypingEngine:
         self.current_momentum = 0
         words_typed_in_sentence = 0
         current_word_buffer = ""
-        just_corrected_word = False
 
         i = 0
         while i < total_len:
@@ -961,38 +976,6 @@ class TypingEngine:
                 char = clipboard_text[i]
                 char_code = ord(char)
                 next_char = clipboard_text[i+1] if i + 1 < total_len else ""
-
-                # --- COGNITIVE TYPO LOGIC ---
-                if self.settings["EnableRevisions"] and (i == 0 or clipboard_text[i-1] in[" ", "\n", "\t"]) and char.isalpha() and not just_corrected_word:
-                    word_end = i
-                    while word_end < total_len and clipboard_text[word_end].isalpha():
-                        word_end += 1
-                    upcoming_word = clipboard_text[i:word_end]
-
-                    if upcoming_word.lower() in COMMON_TYPOS and random.randint(1, 100) <= self.settings["RevisionChance"]:
-                        wrong_word = random.choice(COMMON_TYPOS[upcoming_word.lower()])
-
-                        if upcoming_word.istitle():
-                            wrong_word = wrong_word.capitalize()
-
-                        for c in wrong_word:
-                            self._human_keystroke(c)
-                            self._sleep(self._gaussian(self.settings["UserMeanDelay"], self.settings["UserVariance"]) / 1000.0)
-
-                        self._sleep(random.randint(400, 800) / 1000.0)
-
-                        for _ in range(len(wrong_word)):
-                            self.driver.send_backspace()
-                            self._sleep(random.randint(40, 70) / 1000.0)
-
-                        self._sleep(random.randint(600, 1200) / 1000.0)
-                        self.current_momentum = 0
-
-                        just_corrected_word = True
-                        continue
-
-                if not char.isalpha() or (i > 0 and clipboard_text[i-1] not in[" ", "\n", "\t"]):
-                    just_corrected_word = False
 
                 # --- INTELLIGENT TYPO LOGIC ---
                 if self.settings["EnableTypos"] and char_code < 128 and char not in[" ", "\n", "\t"] and random.randint(1, 100) <= self.settings["TypoChance"]:

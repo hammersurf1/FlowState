@@ -36,7 +36,7 @@ emojipausems = 1800
 # Enable spatial/transposition/omission/doubling typos
 enabletypos = 1
 
-# Enable word-level revisions (type a wrong word, backspace, retype correctly)
+# Enable word-level revisions (legacy; use EnableSmartRevisions instead)
 enablerevisions = 1
 
 # Enable random "brainstorm" pauses
@@ -48,7 +48,7 @@ useenteronly = 0
 # Enable rich-text formatting (bold, italic, lists, headings)
 enablerichtext = 1
 
-# Smart revisions — type a similar word via spaCy, backspace, then correct
+# Smart revisions — type a WordNet synonym, backspace, then correct
 enablesmartrevisions = 1
 
 # Semantic speed — rare words slower, common words faster (spaCy token.rank)

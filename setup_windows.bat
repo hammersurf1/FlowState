@@ -20,24 +20,24 @@ set "PY_URL=https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
 set "PY_INSTALLER=%TEMP%\python-3.12.10-amd64.exe"
 set "VER_FILE=%TEMP%\flowstate_pyver.txt"
 
-REM --- Detect uv ------------------------------------------------
-set USE_UV=0
+REM --- Require uv ------------------------------------------------
 uv --version >nul 2>&1
-if %errorlevel% equ 0 (
-    set USE_UV=1
-    echo  [uv detected - using uv for fast install]
+if %errorlevel% neq 0 (
+    echo   ERROR: uv is required but was not found on PATH.
     echo.
+    echo   Install uv, then re-run this script:
+    echo     powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+    echo.
+    echo   Or see: https://docs.astral.sh/uv/getting-started/installation/
+    pause
+    exit /b 1
 )
+echo  [using uv for environment and dependencies]
+echo.
 
-REM --- Step 0: Enforce Python 3.12 ----------------------------
-echo [Step 0/5] Ensuring Python %PY_VER% is available...
+REM --- Step 0: Enforce Python 3.12 via uv -----------------------
+echo [Step 0/5] Ensuring Python %PY_VER% is available via uv...
 set PYTHON_CMD=
-
-if %USE_UV% equ 1 goto :uv_find_python
-goto :no_uv_find_python
-
-REM --- uv path --------------------------------------------------
-:uv_find_python
 call :uv_ensure_python
 if %errorlevel% neq 0 (
     echo   ERROR: uv failed to provide Python %PY_VER%.
@@ -45,48 +45,6 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 goto :python_ok
-
-REM --- non-uv path --------------------------------------------
-:no_uv_find_python
-call :find_system_python
-if not "%PYTHON_CMD%"=="" goto :python_ok
-
-REM No suitable Python found - download and install 3.12 --------
-echo.
-echo   No suitable Python found. Downloading Python %PY_VER%...
-echo   URL: %PY_URL%
-echo.
-
-powershell -Command "Invoke-WebRequest -Uri '%PY_URL%' -OutFile '%PY_INSTALLER%'" >nul 2>&1
-if not exist "%PY_INSTALLER%" (
-    echo   ERROR: Download failed. Please install Python %PY_VER% manually from
-    echo          https://www.python.org/downloads/release/python-31210/
-    pause
-    exit /b 1
-)
-
-echo   Running installer (silent, per-user, adds to PATH)...
-"%PY_INSTALLER%" /quiet InstallAllUsers=0 PrependPath=1 Include_launcher=1 Include_test=0 Shortcuts=0
-if %errorlevel% neq 0 (
-    echo   ERROR: Python installer failed (exit %errorlevel%).
-    pause
-    exit /b 1
-)
-
-del "%PY_INSTALLER%" >nul 2>&1
-
-REM Re-check py launcher after install ---------------------------
-timeout /t 2 /nobreak >nul 2>&1
-py -%PY_VER% --version >nul 2>&1
-if %errorlevel% equ 0 (
-    set "PYTHON_CMD=py -%PY_VER%"
-    echo   Python %PY_VER% installed and detected via py launcher.
-    goto :python_ok
-)
-
-echo   ERROR: Python was installed but cannot be found.
-pause
-exit /b 1
 
 REM --- uv: ensure Python is available ----------------------------
 :uv_ensure_python
@@ -168,11 +126,7 @@ if exist .venv (
         rmdir /s /q .venv
     )
 )
-if %USE_UV% equ 1 (
-    uv venv --python %PY_VER% .venv
-) else (
-    %PYTHON_CMD% -m venv .venv
-)
+uv venv --python %PY_VER% .venv
 if %errorlevel% neq 0 (
     echo   ERROR: Failed to create virtual environment.
     pause
@@ -183,32 +137,23 @@ echo   OK
 echo.
 
 REM --- Step 3: Install Dependencies ---------------------------
-echo [Step 3/5] Installing dependencies from requirements_win.txt...
-if %USE_UV% equ 1 (
-    uv pip install --python .venv\Scripts\python.exe -r requirements_win.txt
-) else (
-    call .venv\Scripts\activate.bat
-    pip install -r requirements_win.txt
-)
+echo [Step 3/5] Installing dependencies from pyproject.toml (uv sync)...
+uv sync
 if %errorlevel% neq 0 (
     echo.
-    echo   ERROR: pip install failed. Check the output above for details.
+    echo   ERROR: uv sync failed. Check the output above for details.
     pause
     exit /b 1
 )
 echo   OK
 echo.
 
-REM --- Step 4: Download spaCy Model ---------------------------
-echo [Step 4/5] Downloading spaCy language model (en_core_web_md)...
-if %USE_UV% equ 1 (
-    uv pip install --python .venv\Scripts\python.exe "https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.7.1/en_core_web_md-3.7.1.tar.gz"
-) else (
-    .venv\Scripts\pip install "https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.7.1/en_core_web_md-3.7.1.tar.gz"
-)
+REM --- Step 4: Download language models -----------------------
+echo [Step 4/5] Downloading spaCy model and NLTK WordNet corpora...
+uv run python scripts\download_models.py
 if %errorlevel% neq 0 (
     echo.
-    echo   ERROR: spaCy model download failed.
+    echo   ERROR: Model download failed.
     pause
     exit /b 1
 )
@@ -228,18 +173,12 @@ echo.
 echo    2. Navigate to this folder:
 echo       cd %cd%
 echo.
-if %USE_UV% equ 1 (
 echo    3. Start FlowState:
 echo       uv run python src\main_win.py
 echo.
-) else (
-echo    3. Activate the virtual environment:
-echo       .venv\Scripts\activate
+echo    To download/update language models later:
+echo       uv run python scripts\download_models.py
 echo.
-echo    4. Start FlowState:
-echo       python src\main_win.py
-echo.
-)
 echo  NOTE: Administrator is required because FlowState uses global
 echo  keyboard hooks to detect hotkeys like Ctrl+Alt+V. This is a
 echo  Windows security requirement, not a FlowState choice.

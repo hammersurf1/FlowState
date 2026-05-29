@@ -12,8 +12,8 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
 
@@ -32,16 +32,15 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install -r requirements_win.txt
-          pip install pyinstaller
-          playwright install chromium
+          uv sync
+          uv pip install pyinstaller
+          uv run playwright install chromium
 
-      - name: Download spaCy Model
-        run: |
-          pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.7.1/en_core_web_md-3.7.1.tar.gz
+      - name: Download Language Models
+        run: uv run python scripts/download_models.py
 
       - name: Build (onedir)
-        run: pyinstaller FlowState.spec --clean --noconfirm
+        run: uv run pyinstaller FlowState.spec --clean --noconfirm
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress
@@ -69,8 +68,8 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
 
@@ -89,16 +88,15 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install -r requirements_mac.txt
-          pip install pyinstaller
-          playwright install chromium
+          uv sync
+          uv pip install pyinstaller
+          uv run playwright install chromium
 
-      - name: Download spaCy Model
-        run: |
-          pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.7.1/en_core_web_md-3.7.1.tar.gz
+      - name: Download Language Models
+        run: uv run python scripts/download_models.py
 
       - name: Build .app
-        run: pyinstaller FlowState_mac.spec --clean --noconfirm
+        run: uv run pyinstaller FlowState_mac.spec --clean --noconfirm
 
       - name: Install create-dmg
         run: brew install create-dmg

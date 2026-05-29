@@ -12,7 +12,15 @@ dependencies = [
     "pynput>=1.8.1",
     "pyperclip>=1.11.0",
     "pystray>=0.19.5",
-    "spacy>=3.7.0",
+    "spacy==3.7.4",
+    "numpy>=1.19.0,<2.0",
+    "nltk>=3.8.1",
+    "en-core-web-md @ https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.7.1/en_core_web_md-3.7.1.tar.gz",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
 ]
 
 [tool.pytest.ini_options]

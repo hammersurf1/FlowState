@@ -22,7 +22,7 @@ binaries += tmp_ret[1]
 hiddenimports += tmp_ret[2]
 
 # Bundle spaCy + model so the installer is fully self-contained
-for pkg in ('spacy', 'thinc', 'blis', 'en_core_web_md'):
+for pkg in ('spacy', 'thinc', 'blis', 'en_core_web_md', 'nltk'):
     try:
         pkg_ret = collect_all(pkg)
         datas += pkg_ret[0]

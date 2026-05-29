@@ -1,17 +1,24 @@
 """
 FlowState — SemanticAnalyzer
 Produces per-token and per-chunk metadata using spaCy.
-Synonyms are found via vector similarity (en_core_web_md vectors).
+Synonyms are found via WordNet (NLTK), with filtered vector fallback.
 """
 
 from __future__ import annotations
 
-import random
 from dataclasses import dataclass
 from typing import List, Optional, Set
 
 import numpy as np
 import spacy
+
+
+_POS_TO_WORDNET = {
+    "NOUN": "n",
+    "VERB": "v",
+    "ADJ": "a",
+    "ADV": "r",
+}
 
 
 @dataclass(frozen=True)
@@ -32,7 +39,6 @@ class TokenMeta:
 class SemanticAnalyzer:
     """Wraps spaCy to annotate text for humanized typing."""
 
-    # Dependency relations that mark the *closing* token of a subordinate clause
     _CLAUSE_CLOSERS = {
         "advcl", "relcl", "ccomp", "xcomp", "acl", "acomp",
     }
@@ -46,14 +52,32 @@ class SemanticAnalyzer:
                 f"Run: python -m spacy download {model_name}"
             ) from exc
 
-        # Cache for vector-similarity synonym lookups
         self._synonym_cache: dict[tuple[str, str], list[str]] = {}
+        self._wordnet_ready = False
+
+    def _ensure_wordnet(self) -> bool:
+        if self._wordnet_ready:
+            return True
+        try:
+            import nltk
+            from nltk.corpus import wordnet as wn  # noqa: F401
+            nltk.data.find("corpora/wordnet")
+        except LookupError:
+            try:
+                import nltk
+                nltk.download("wordnet", quiet=True)
+                nltk.download("omw-1.4", quiet=True)
+            except Exception:
+                return False
+        except ImportError:
+            return False
+        self._wordnet_ready = True
+        return True
 
     def analyze(self, text: str) -> List[TokenMeta]:
         """Parse *text* and return a list of TokenMeta, one per spaCy token."""
         doc = self.nlp(text)
 
-        # Pre-compute noun chunk token indices
         chunk_tokens: Set[int] = set()
         chunk_end_tokens: Set[int] = set()
         for chunk in doc.noun_chunks:
@@ -61,7 +85,6 @@ class SemanticAnalyzer:
                 chunk_tokens.add(idx)
             chunk_end_tokens.add(chunk.end - 1)
 
-        # Pre-compute entity token indices
         entity_tokens: dict[int, str] = {}
         for ent in doc.ents:
             for idx in range(ent.start, ent.end):
@@ -69,9 +92,6 @@ class SemanticAnalyzer:
 
         metas: List[TokenMeta] = []
         for token in doc:
-            # Clause boundary heuristic:
-            # token is the closing token of a clause if its dependency is in _CLAUSE_CLOSERS
-            # OR if it is the last token of a dependency subtree rooted at a clause head.
             is_clause_boundary = token.dep_ in self._CLAUSE_CLOSERS
 
             if not is_clause_boundary and token.head.dep_ in self._CLAUSE_CLOSERS:
@@ -94,42 +114,110 @@ class SemanticAnalyzer:
 
         return metas
 
-    def synonym_candidates(self, token_text: str, pos: str, max_results: int = 5) -> List[str]:
-        """Return semantically similar words from the spaCy vocab vectors.
+    @staticmethod
+    def _match_case(source: str, candidate: str) -> str:
+        if source.istitle():
+            return candidate.title()
+        if source.isupper():
+            return candidate.upper()
+        return candidate.lower()
 
-        Uses en_core_web_md vectors; no external synonym lexicon required.
-        """
-        cache_key = (token_text.lower(), pos)
-        if cache_key in self._synonym_cache:
-            return self._synonym_cache[cache_key]
+    @staticmethod
+    def _is_valid_candidate(source: str, word: str) -> bool:
+        if word.lower() == source.lower():
+            return False
+        if not word.isascii() or not word.isalpha():
+            return False
+        if " " in word:
+            return False
+        src_len = len(source)
+        if len(word) < 3 or len(word) > 14:
+            return False
+        if abs(len(word) - src_len) > 3:
+            return False
+        if word != word.lower() and word != word.title() and word != word.upper():
+            return False
+        return True
 
-        lexeme = self.nlp.vocab[token_text.lower()]
-        if not lexeme.has_vector:
-            self._synonym_cache[cache_key] = []
+    def _pos_matches(self, word: str, expected_pos: str) -> bool:
+        doc = self.nlp(word)
+        if not doc:
+            return False
+        actual = doc[0].pos_
+        if actual == expected_pos:
+            return True
+        if expected_pos == "ADJ" and actual in ("ADJ", "NOUN"):
+            return True
+        return False
+
+    def _wordnet_candidates(self, token_text: str, pos: str, max_results: int) -> List[str]:
+        if not self._ensure_wordnet():
             return []
 
-        # Query most similar vectors in the vocab
+        from nltk.corpus import wordnet as wn
+
+        wn_pos = _POS_TO_WORDNET.get(pos)
+        if not wn_pos:
+            return []
+
+        seen: set[str] = set()
+        candidates: list[str] = []
+
+        synsets = wn.synsets(token_text.lower(), pos=wn_pos)
+        if not synsets and pos == "ADJ":
+            synsets = wn.synsets(token_text.lower(), pos="s")
+
+        for synset in synsets:
+            for lemma in synset.lemmas():
+                raw = lemma.name().replace("_", " ")
+                if not self._is_valid_candidate(token_text, raw):
+                    continue
+                key = raw.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append(self._match_case(token_text, raw))
+                if len(candidates) >= max_results:
+                    return candidates
+
+        return candidates
+
+    def _vector_candidates(self, token_text: str, pos: str, max_results: int) -> List[str]:
+        lexeme = self.nlp.vocab[token_text.lower()]
+        if not lexeme.has_vector:
+            return []
+
         try:
             keys, _, _ = self.nlp.vocab.vectors.most_similar(
-                np.asarray([lexeme.vector]), n=max_results + 10
+                np.asarray([lexeme.vector]), n=max_results + 20
             )
         except Exception:
-            self._synonym_cache[cache_key] = []
             return []
 
         candidates: list[str] = []
         for key in keys[0]:
             word = self.nlp.vocab.strings[key]
-            # Filter out identical words, non-alpha, and very short words
-            if (
-                word.lower() == token_text.lower()
-                or not word.isalpha()
-                or len(word) < 3
-            ):
+            if not self._is_valid_candidate(token_text, word):
                 continue
-            candidates.append(word)
+            if not self._pos_matches(word, pos):
+                continue
+            candidates.append(self._match_case(token_text, word))
             if len(candidates) >= max_results:
                 break
 
-        self._synonym_cache[cache_key] = candidates
         return candidates
+
+    def synonym_candidates(self, token_text: str, pos: str, max_results: int = 5) -> List[str]:
+        """Return plausible synonym substitutes for smart revisions."""
+        cache_key = (token_text.lower(), pos)
+        if cache_key in self._synonym_cache:
+            return [self._match_case(token_text, c) for c in self._synonym_cache[cache_key]]
+
+        raw_candidates = self._wordnet_candidates(token_text, pos, max_results)
+        if not raw_candidates:
+            raw_candidates = self._vector_candidates(token_text, pos, max_results)
+
+        # Store lowercase forms; apply surface capitalization on read.
+        stored = [c.lower() for c in raw_candidates]
+        self._synonym_cache[cache_key] = stored
+        return [self._match_case(token_text, c) for c in stored]

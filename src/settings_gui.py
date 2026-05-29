@@ -488,7 +488,7 @@ class SettingsWindow:
         )
         self._add_checkbox(
             parent, "EnableRevisions",
-            "Enable word-level revisions (common misspellings)"
+            "Enable word-level revisions (legacy — use Smart Revisions below)"
         )
         self._add_checkbox(
             parent, "EnableBrainstormPauses",
@@ -506,7 +506,7 @@ class SettingsWindow:
         self._add_section(parent, "Semantic Humanization")
         self._add_checkbox(
             parent, "EnableSmartRevisions",
-            "Smart revisions — type a similar word, backspace, then correct"
+            "Smart revisions — type a WordNet synonym, backspace, then correct"
         )
         self._add_checkbox(
             parent, "EnableSemanticSpeed",

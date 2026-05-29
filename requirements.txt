@@ -1,3 +1,4 @@
+# Deprecated: use `uv sync` from pyproject.toml instead.
 pystray==0.19.5
 Pillow==12.2.0
 keyboard==0.13.5
@@ -5,3 +6,4 @@ pynput==1.8.1
 pyperclip==1.11.0
 playwright==1.59.0
 spacy==3.7.4
+nltk>=3.8.1
