@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import hashlib
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import List, Literal, Optional, Tuple
 
+from retrospective_edits import DeferredRevision, should_defer_revision
 from semantic_analyzer import SemanticAnalyzer, TokenMeta
 from spacy.tokens import Doc
 
@@ -152,6 +153,72 @@ class TypingPlanner:
             i += 1
 
         return directives
+
+    def plan_with_deferred(
+        self,
+        text: str,
+        mean_delay: int,
+        variance: int,
+        composition: Optional[CompositionSettings] = None,
+    ) -> Tuple[List[TypingDirective], List[DeferredRevision]]:
+        """Return directives plus a queue of deferred look-back revisions."""
+        directives = self.plan(text, mean_delay, variance, composition)
+        deferred: List[DeferredRevision] = []
+        char_offset = 0
+
+        for idx, directive in enumerate(directives):
+            has_revision = directive.revision_candidate or directive.revision_span
+            if has_revision and should_defer_revision(idx, text):
+                trigger = self._pick_defer_trigger(idx, directives)
+                if directive.revision_span:
+                    start, end, wrong = directive.revision_span
+                    right = directive.text[start:end]
+                    deferred.append(DeferredRevision(
+                        trigger_after_directive=trigger,
+                        char_offset=char_offset + start,
+                        word_len=len(right),
+                        wrong=wrong,
+                        right=right,
+                    ))
+                    directives[idx] = replace(directive, revision_span=None)
+                elif directive.revision_candidate:
+                    wrong = directive.revision_candidate
+                    right = directive.text.strip()
+                    ws_prefix = len(directive.text) - len(directive.text.lstrip())
+                    deferred.append(DeferredRevision(
+                        trigger_after_directive=trigger,
+                        char_offset=char_offset + ws_prefix,
+                        word_len=len(right),
+                        wrong=wrong,
+                        right=right,
+                    ))
+                    directives[idx] = replace(directive, revision_candidate=None)
+            char_offset += len(directive.text)
+
+        return directives, deferred
+
+    @staticmethod
+    def _pick_defer_trigger(directive_index: int, directives: List[TypingDirective]) -> int:
+        """Pick a trigger 1–3 directives ahead, preferring sentence/paragraph ends."""
+        candidates: List[int] = []
+        for ahead in range(1, 4):
+            target = directive_index + ahead
+            if target >= len(directives):
+                break
+            stripped = directives[target].text.rstrip()
+            if stripped and stripped[-1] in ".?!\n":
+                candidates.append(target)
+            else:
+                candidates.append(target)
+
+        if not candidates:
+            return directive_index
+
+        for target in candidates:
+            stripped = directives[target].text.rstrip()
+            if stripped and stripped[-1] in ".?!\n":
+                return target
+        return candidates[-1]
 
     def _composition_pauses(
         self,

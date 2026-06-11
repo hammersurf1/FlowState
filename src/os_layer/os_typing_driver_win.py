@@ -147,8 +147,17 @@ class OsTypingDriverWin:
         finally:
             self._exit_typing()
 
+    _NAVIGATION_ARROWS = frozenset({
+        "arrowleft", "arrowright", "arrowup", "arrowdown",
+    })
+
+    def _is_navigation_shortcut(self, shortcut: str) -> bool:
+        s = shortcut.lower().replace("control", "ctrl").replace("meta", "win")
+        parts = set(s.replace("+", " ").split())
+        return bool(parts & self._NAVIGATION_ARROWS)
+
     def send_key(self, shortcut):
-        """In OS mode, only pass through structural keys (Enter, Tab).
+        """Pass structural keys (Enter, Tab) and cursor navigation arrows.
 
         Formatting shortcuts (Ctrl+B, Ctrl+I, etc.) are silently ignored
         because they trigger browser/OS functions instead of formatting.
@@ -165,6 +174,12 @@ class OsTypingDriverWin:
             self._enter_typing()
             try:
                 keyboard.send("tab")
+            finally:
+                self._exit_typing()
+        elif self._is_navigation_shortcut(shortcut):
+            self._enter_typing()
+            try:
+                keyboard.send(s)
             finally:
                 self._exit_typing()
         # else: formatting shortcut — silently ignored in OS mode

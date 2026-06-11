@@ -69,6 +69,7 @@ def engine():
 def test_smart_revision_produces_backspaces(engine):
     random.seed(1)
     engine.settings["RevisionChance"] = 100
+    engine.settings["EnableRevisions"] = 0
     engine.is_running = True
     engine._type_plain_text("The results were excellent.", {})
     assert any(entry[0] == "backspace" for entry in engine.driver.log)

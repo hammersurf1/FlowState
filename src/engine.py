@@ -12,6 +12,7 @@ from rich_text_formatter import RichTextFormatter, TypeAction, KeyAction, PasteH
 from semantic_analyzer import SemanticAnalyzer
 from iki_timing import sample_inter_key_delay_ms
 from typing_planner import TypingPlanner, CompositionSettings
+from retrospective_edits import DeferredRevision, TypedPositionTracker
 try:
     from clipboard_reader import get_clipboard_styled_runs
     _HAS_CLIPBOARD_HTML = True
@@ -127,6 +128,7 @@ class TypingEngine:
             "EnableFingerPenalty": 1, "EnableFluencyStates": 1,
             "EnableNumberSymbolCare": 1, "EnableCapsRunRealism": 1,
             "EnableFrequencyTypos": 1, "EnableDeferredCorrections": 1,
+            "RetrospectiveLookbackChars": 600,
             "EnableCompositionPauses": 0,
             "CompositionPauseMinMs": 300, "CompositionPauseMaxMs": 6000,
             "ParagraphPlanningMinMs": 2000, "ParagraphPlanningMaxMs": 8000,
@@ -237,7 +239,8 @@ class TypingEngine:
             'UserVariance': str(self.settings['UserVariance']),
             'TypoChance': str(self.settings['TypoChance']),
             'TypoDelay': str(self.settings['TypoDelay']),
-            'RevisionChance': str(self.settings['RevisionChance'])
+            'RevisionChance': str(self.settings['RevisionChance']),
+            'RetrospectiveLookbackChars': str(self.settings['RetrospectiveLookbackChars']),
         }
         self.config['Advanced'] = {
             'SentencePauseMs': str(self.settings['SentencePauseMs']),
@@ -713,6 +716,7 @@ class TypingEngine:
             self.settings["EnableSmartRevisions"],
             self.settings["EnableEntityCare"],
             self.settings["EnableCompositionPauses"],
+            self.settings["EnableRevisions"],
         ])
 
         if semantic_active:
@@ -726,13 +730,22 @@ class TypingEngine:
                 paragraph_planning_min_ms=self.settings["ParagraphPlanningMinMs"],
                 paragraph_planning_max_ms=self.settings["ParagraphPlanningMaxMs"],
             )
-            directives = self._planner.plan(
-                text=clipboard_text,
-                mean_delay=self.settings["UserMeanDelay"],
-                variance=self.settings["UserVariance"],
-                composition=composition,
-            )
-            self._execute_directives(directives, neighbor_map)
+            deferred: list[DeferredRevision] = []
+            if self.settings["EnableRevisions"]:
+                directives, deferred = self._planner.plan_with_deferred(
+                    text=clipboard_text,
+                    mean_delay=self.settings["UserMeanDelay"],
+                    variance=self.settings["UserVariance"],
+                    composition=composition,
+                )
+            else:
+                directives = self._planner.plan(
+                    text=clipboard_text,
+                    mean_delay=self.settings["UserMeanDelay"],
+                    variance=self.settings["UserVariance"],
+                    composition=composition,
+                )
+            self._execute_directives(directives, neighbor_map, deferred=deferred)
         else:
             self._legacy_type_plain_text(clipboard_text, neighbor_map)
 
@@ -844,6 +857,113 @@ class TypingEngine:
                 self._sleep(random.uniform(25, 110) / 1000.0)
             idx += 1
 
+    def _use_mac_navigation(self) -> bool:
+        return sys.platform == "darwin"
+
+    def _human_arrow(self, key: str):
+        """Arrow key with slower, variable timing than typing."""
+        self.driver.send_key(key)
+        delay = sample_inter_key_delay_ms(
+            self.settings["UserMeanDelay"] * 1.4,
+            int(self.settings["UserVariance"] * 1.3),
+        )
+        self._sleep(delay / 1000.0)
+
+    def _execute_nav_keys(self, keys: list[str]):
+        for key in keys:
+            self._human_arrow(key)
+
+    def _navigate_to_offset(self, tracker: TypedPositionTracker, target_offset: int):
+        keys = tracker.plan_navigate_back(
+            target_offset,
+            use_mac_cmd=self._use_mac_navigation(),
+        )
+        self._execute_nav_keys(keys)
+
+    def _navigate_to_frontier(self, tracker: TypedPositionTracker, from_offset: int):
+        keys = tracker.plan_navigate_forward(
+            from_offset,
+            use_mac_cmd=self._use_mac_navigation(),
+        )
+        self._execute_nav_keys(keys)
+
+    def _retrospective_lookback_distance(
+        self,
+        rev: DeferredRevision,
+        tracker: TypedPositionTracker,
+    ) -> int:
+        return tracker.chars_to_navigate_back(rev.char_offset + rev.word_len)
+
+    def _is_retrospective_eligible(
+        self,
+        rev: DeferredRevision,
+        tracker: TypedPositionTracker,
+    ) -> bool:
+        if not self.settings["EnableRevisions"]:
+            return False
+        if not self.settings["EnableSmartRevisions"]:
+            return False
+        if not self.is_running:
+            return False
+        lookback = self.settings["RetrospectiveLookbackChars"]
+        dist = self._retrospective_lookback_distance(rev, tracker)
+        return dist >= 40 and dist <= lookback
+
+    def _should_fire_deferred_revision(
+        self,
+        rev: DeferredRevision,
+        tracker: TypedPositionTracker,
+    ) -> bool:
+        if not self._is_retrospective_eligible(rev, tracker):
+            return False
+        return random.randint(1, 100) <= self.settings["RevisionChance"]
+
+    def _do_retrospective_revision(self, rev: DeferredRevision, tracker: TypedPositionTracker):
+        """Navigate back, delete existing word, perform synonym swap, return to frontier."""
+        frontier = tracker.cursor_offset
+        word_end = rev.char_offset + rev.word_len
+
+        self._sleep(random.randint(800, 1800) / 1000.0)
+        self.current_momentum = 0
+
+        self._navigate_to_offset(tracker, word_end)
+
+        for _ in range(rev.word_len):
+            self.driver.send_backspace()
+            self._sleep(random.randint(45, 85) / 1000.0)
+
+        self._do_word_revision(rev.wrong, rev.right)
+        self._navigate_to_frontier(tracker, rev.char_offset + len(rev.right))
+
+    def _process_deferred_revisions(
+        self,
+        deferred: list[DeferredRevision],
+        pending: list[DeferredRevision],
+        directive_index: int,
+        tracker: TypedPositionTracker,
+    ):
+        """Fire at most one deferred revision whose trigger has passed."""
+        lookback = self.settings["RetrospectiveLookbackChars"]
+
+        for rev in list(pending):
+            if rev.trigger_after_directive > directive_index:
+                continue
+
+            dist = self._retrospective_lookback_distance(rev, tracker)
+            if dist > lookback:
+                pending.remove(rev)
+                continue
+            if dist < 40:
+                continue
+
+            if not self._should_fire_deferred_revision(rev, tracker):
+                pending.remove(rev)
+                continue
+
+            pending.remove(rev)
+            self._do_retrospective_revision(rev, tracker)
+            break
+
     def _do_word_revision(self, wrong: str, right: str):
         """Type wrong word, hesitate, backspace, type correct word."""
         for c in wrong:
@@ -867,9 +987,13 @@ class TypingEngine:
             delay = self._gaussian(calc_mean, self.settings["UserVariance"])
             self._sleep(max(10, delay) / 1000.0)
 
-    def _execute_directives(self, directives, neighbor_map):
+    def _execute_directives(self, directives, neighbor_map, deferred=None):
         """Typed-loop over directives instead of raw characters."""
-        for directive in directives:
+        deferred = list(deferred or [])
+        pending = list(deferred)
+        tracker = TypedPositionTracker()
+
+        for directive_index, directive in enumerate(directives):
             self._sleep(0)
             mean, effective_variance, effective_typo_chance = self._directive_timing(directive)
             text = directive.text
@@ -905,6 +1029,11 @@ class TypingEngine:
                     directive, neighbor_map, 0, text_len,
                     mean, effective_variance, effective_typo_chance,
                 )
+
+            tracker.record_text(directive.text)
+            self._process_deferred_revisions(
+                deferred, pending, directive_index, tracker,
+            )
 
             if directive.pause_after_ms and (
                 self.settings["EnableCompositionPauses"]

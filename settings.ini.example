@@ -19,6 +19,9 @@ typodelay = 100
 # Chance of a multi-word revision / retyping event (percentage, 0-100)
 revisionchance = 3
 
+# Max characters back for retrospective look-back edits
+retrospectivelookbackchars = 600
+
 [Advanced]
 # Pause after sentence-ending punctuation (milliseconds)
 sentencepausems = 1200
@@ -51,7 +54,7 @@ compositionsensitivity = 50
 # Enable spatial/transposition/omission/doubling typos
 enabletypos = 1
 
-# Enable word-level revisions (legacy; use EnableSmartRevisions instead)
+# Retrospective edits — jump back with arrow keys and revise earlier words
 enablerevisions = 1
 
 # Enable random "brainstorm" pauses

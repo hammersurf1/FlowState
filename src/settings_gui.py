@@ -34,6 +34,7 @@ PROFILE_SLIDER_RANGES = {
     "TypoChance": (0, 30),
     "TypoDelay": (50, 500),
     "RevisionChance": (0, 30),
+    "RetrospectiveLookbackChars": (100, 1200),
 }
 
 
@@ -481,6 +482,14 @@ class SettingsWindow:
         self._add_slider(parent, "TypoChance", "Typo Chance (%)", 0, 30, "")
         self._add_slider(parent, "TypoDelay", "Correction Speed (ms)", 50, 500, "")
         self._add_slider(parent, "RevisionChance", "Word Revision Chance (%)", 0, 30, "")
+        self._add_slider(
+            parent,
+            "RetrospectiveLookbackChars",
+            "Retrospective Lookback (chars)",
+            100,
+            1200,
+            "",
+        )
 
     def _build_pauses_section(self, parent):
         self._add_section(parent, "Human-like Pauses")
@@ -498,7 +507,11 @@ class SettingsWindow:
     def _build_behavior_section(self, parent):
         self._add_section(parent, "Core Behavior")
         self._add_checkbox(parent, "EnableTypos", "Enable typos (spatial, transposition, omission, doubling)")
-        self._add_checkbox(parent, "EnableRevisions", "Enable word-level revisions (legacy)")
+        self._add_checkbox(
+            parent,
+            "EnableRevisions",
+            "Retrospective edits — jump back and revise earlier words",
+        )
         self._add_checkbox(parent, "EnableBrainstormPauses", "Enable random brainstorm pauses")
         self._add_checkbox(
             parent, "EnableCompositionPauses",
