@@ -22,9 +22,13 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "python-docx>=1.2.0",
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "integration: tests that launch Playwright and a local editor",
+]

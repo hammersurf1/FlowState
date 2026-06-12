@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>FlowState Formatting Test Editor</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: #f0f0f0;
+      color: #202124;
+    }
+    header {
+      padding: 12px 20px;
+      background: #1a73e8;
+      color: #fff;
+      font-size: 14px;
+    }
+    #editor {
+      min-height: 70vh;
+      margin: 20px auto;
+      max-width: 900px;
+      padding: 48px 72px;
+      background: #fff;
+      border: 1px solid #dadce0;
+      outline: none;
+      line-height: 1.5;
+      font-size: 11pt;
+    }
+    #editor h1 { font-size: 20pt; font-weight: 700; margin: 0 0 12px; }
+    #editor h2 { font-size: 16pt; font-weight: 700; margin: 0 0 10px; }
+    #editor h3 { font-size: 14pt; font-weight: 700; margin: 0 0 8px; }
+    #editor p { margin: 0 0 8px; }
+    #editor table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 8px 0;
+    }
+    #editor td, #editor th {
+      border: 1pt solid #000;
+      padding: 5pt;
+      vertical-align: top;
+    }
+    #editor hr {
+      border: none;
+      border-top: 1px solid #000;
+      margin: 12px 0;
+    }
+    #status {
+      max-width: 900px;
+      margin: 0 auto 20px;
+      padding: 0 20px;
+      font-size: 12px;
+      color: #5f6368;
+    }
+  </style>
+</head>
+<body>
+  <header>FlowState Formatting Test Editor — mirrors Google Docs shortcut behaviour</header>
+  <div id="status">Ready. Focus the editor and run the formatting test harness.</div>
+  <div id="editor" contenteditable="true" spellcheck="false"></div>
+
+  <script>
+    const editor = document.getElementById('editor');
+    const status = document.getElementById('status');
+
+    function setStatus(msg) {
+      status.textContent = msg;
+    }
+
+    function currentBlock() {
+      const sel = window.getSelection();
+      if (!sel || !sel.rangeCount) return null;
+      let node = sel.getRangeAt(0).startContainer;
+      if (node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+      while (node && node !== editor) {
+        const tag = node.tagName ? node.tagName.toLowerCase() : '';
+        if (['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'div'].includes(tag)) {
+          if (tag === 'div' && node.id === 'editor') {
+            node = node.parentElement;
+            continue;
+          }
+          return node;
+        }
+        node = node.parentElement;
+      }
+      return null;
+    }
+
+    function ensureParagraph() {
+      if (!editor.childNodes.length) {
+        const p = document.createElement('p');
+        p.appendChild(document.createElement('br'));
+        editor.appendChild(p);
+      }
+      let block = currentBlock();
+      if (!block || block === editor) {
+        const p = document.createElement('p');
+        p.appendChild(document.createElement('br'));
+        editor.appendChild(p);
+        block = p;
+      }
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(block);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return block;
+    }
+
+    function splitBlock() {
+      const block = ensureParagraph();
+      if (!block || block === editor) return;
+      const p = document.createElement('p');
+      p.appendChild(document.createElement('br'));
+      block.after(p);
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(p);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+
+    function clearPlaceholderBreaks(block) {
+      if (!block) return;
+      if (block.childNodes.length === 1 && block.firstChild.nodeName === 'BR') {
+        block.innerHTML = '';
+      }
+    }
+
+    function replaceBlockTag(block, tagName) {
+      if (!block || block === editor) return;
+      clearPlaceholderBreaks(block);
+      const replacement = document.createElement(tagName);
+      while (block.firstChild) replacement.appendChild(block.firstChild);
+      block.replaceWith(replacement);
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(replacement);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+
+    function toggleFormat(command) {
+      ensureParagraph();
+      document.execCommand(command, false, null);
+    }
+
+    function applyHeading(level) {
+      ensureParagraph();
+      const block = currentBlock();
+      if (!block) return;
+      if (level === 0) {
+        replaceBlockTag(block, 'p');
+      } else {
+        replaceBlockTag(block, 'h' + Math.min(level, 6));
+      }
+    }
+
+    function toggleList(ordered) {
+      ensureParagraph();
+      document.execCommand(ordered ? 'insertOrderedList' : 'insertUnorderedList', false, null);
+    }
+
+    function insertPageBreak() {
+      ensureParagraph();
+      const hr = document.createElement('hr');
+      hr.setAttribute('data-page-break', 'true');
+      const sel = window.getSelection();
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(hr);
+      const p = document.createElement('p');
+      p.appendChild(document.createElement('br'));
+      hr.after(p);
+      range.selectNodeContents(p);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+
+    function insertHtml(html) {
+      ensureParagraph();
+      const sel = window.getSelection();
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      const template = document.createElement('template');
+      template.innerHTML = html.trim();
+      const frag = template.content.cloneNode(true);
+      const block = currentBlock();
+      if (block && block !== editor && frag.childElementCount === 1) {
+        const only = frag.firstElementChild;
+        if (only && only.tagName && only.tagName.toLowerCase() === 'table') {
+          const isEmpty = !block.textContent.replace(/\u200B/g, '').trim();
+          if (isEmpty) {
+            block.after(only);
+          } else {
+            block.replaceWith(only);
+          }
+          const p = document.createElement('p');
+          p.appendChild(document.createElement('br'));
+          only.after(p);
+          range.selectNodeContents(p);
+          range.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(range);
+          return;
+        }
+      }
+      range.insertNode(frag);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+
+    editor.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+        event.preventDefault();
+        splitBlock();
+        setStatus('New paragraph');
+        return;
+      }
+
+      const mod = event.ctrlKey || event.metaKey;
+      if (!mod) return;
+
+      if (event.altKey && !event.shiftKey) {
+        const digit = event.key;
+        if (digit >= '0' && digit <= '6') {
+          event.preventDefault();
+          applyHeading(parseInt(digit, 10));
+          setStatus('Applied heading level ' + digit);
+          return;
+        }
+      }
+
+      if (event.shiftKey) {
+        if (event.key === '7') {
+          event.preventDefault();
+          toggleList(true);
+          setStatus('Ordered list toggled');
+          return;
+        }
+        if (event.key === '8') {
+          event.preventDefault();
+          toggleList(false);
+          setStatus('Unordered list toggled');
+          return;
+        }
+      }
+
+      const key = event.key.toLowerCase();
+      if (key === 'b') {
+        event.preventDefault();
+        toggleFormat('bold');
+        return;
+      }
+      if (key === 'i') {
+        event.preventDefault();
+        toggleFormat('italic');
+        return;
+      }
+      if (key === 'u') {
+        event.preventDefault();
+        toggleFormat('underline');
+        return;
+      }
+      if (key === 'enter') {
+        event.preventDefault();
+        insertPageBreak();
+        return;
+      }
+    });
+
+    editor.addEventListener('paste', (event) => {
+      const html = event.clipboardData && event.clipboardData.getData('text/html');
+      if (html) {
+        event.preventDefault();
+        const match = html.match(/<!--StartFragment-->([\s\S]*?)<!--EndFragment-->/i);
+        const fragment = match ? match[1] : html;
+        insertHtml(fragment);
+        setStatus('Pasted HTML fragment');
+      }
+    });
+
+    function insertTextAtCursor(text) {
+      const block = ensureParagraph();
+      clearPlaceholderBreaks(block);
+      const sel = window.getSelection();
+      if (!sel || !sel.rangeCount) return;
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      const node = document.createTextNode(text);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+
+    window.__flowstateEditor = {
+      clear() {
+        editor.innerHTML = '';
+        setStatus('Editor cleared');
+      },
+      focus() {
+        editor.focus();
+      },
+      insertText(text) {
+        insertTextAtCursor(text);
+      },
+      insertStyledText(text, style) {
+        let html = text
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+        if (style.bold) html = '<strong>' + html + '</strong>';
+        if (style.italic) html = '<em>' + html + '</em>';
+        if (style.underline) html = '<u>' + html + '</u>';
+        const template = document.createElement('template');
+        template.innerHTML = html;
+        const block = ensureParagraph();
+        clearPlaceholderBreaks(block);
+        const sel = window.getSelection();
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+        range.insertNode(template.content);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      },
+      getPlainText() {
+        return window.__flowstateEditor.extractDocument().plainText;
+      },
+      getFormattedBlocks() {
+        return window.__flowstateEditor.extractDocument().blocks;
+      },
+      extractDocument() {
+        const blocks = [];
+        const plainParts = [];
+
+        function styleFlags(node) {
+          const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+          if (!el) return { bold: false, italic: false, underline: false };
+          const style = window.getComputedStyle(el);
+          const weight = style.fontWeight;
+          const bold = weight === 'bold' || weight === '700' || parseInt(weight, 10) >= 600;
+          const italic = style.fontStyle === 'italic';
+          const underline = (style.textDecorationLine || style.textDecoration || '').includes('underline');
+          return { bold, italic, underline };
+        }
+
+        function pushRun(runs, text, flags) {
+          if (!text) return;
+          text = text.replace(/^\n+/, '').replace(/\n+$/, '');
+          if (!text) return;
+          const last = runs[runs.length - 1];
+          if (
+            last &&
+            last.bold === flags.bold &&
+            last.italic === flags.italic &&
+            last.underline === flags.underline
+          ) {
+            last.text += text;
+            return;
+          }
+          runs.push({ text, bold: flags.bold, italic: flags.italic, underline: flags.underline });
+        }
+
+        function runsFromNode(node) {
+          const runs = [];
+          function walk(n, inherited) {
+            if (n.nodeType === Node.TEXT_NODE) {
+              pushRun(runs, n.textContent, inherited);
+              return;
+            }
+            if (n.nodeType !== Node.ELEMENT_NODE) return;
+            const tag = n.tagName.toLowerCase();
+            if (tag === 'br') {
+              pushRun(runs, '\n', inherited);
+              return;
+            }
+            const flags = { ...inherited };
+            if (tag === 'b' || tag === 'strong') flags.bold = true;
+            if (tag === 'i' || tag === 'em') flags.italic = true;
+            if (tag === 'u') flags.underline = true;
+            const computed = styleFlags(n);
+            flags.bold = flags.bold || computed.bold;
+            flags.italic = flags.italic || computed.italic;
+            flags.underline = flags.underline || computed.underline;
+            for (const child of n.childNodes) walk(child, flags);
+          }
+          walk(node, { bold: false, italic: false, underline: false });
+          return runs;
+        }
+
+        function blockPlain(runs) {
+          return runs.map((r) => r.text).join('');
+        }
+
+        for (const child of editor.childNodes) {
+          if (child.nodeType !== Node.ELEMENT_NODE) continue;
+          const tag = child.tagName.toLowerCase();
+
+          if (/^h[1-6]$/.test(tag)) {
+            const runs = runsFromNode(child);
+            const level = parseInt(tag[1], 10);
+            blocks.push({ kind: 'heading', level, runs, rows: [] });
+            plainParts.push(blockPlain(runs));
+            continue;
+          }
+
+          if (tag === 'p' || tag === 'div') {
+            const runs = runsFromNode(child);
+            const text = blockPlain(runs);
+            if (!text.trim()) {
+              blocks.push({ kind: 'blank', level: 0, runs: [], rows: [] });
+              plainParts.push('');
+            } else {
+              blocks.push({ kind: 'paragraph', level: 0, runs, rows: [] });
+              plainParts.push(text);
+            }
+            continue;
+          }
+
+          if (tag === 'ul' || tag === 'ol') {
+            const listType = tag === 'ol' ? 'ol' : 'ul';
+            for (const li of child.querySelectorAll(':scope > li')) {
+              const runs = runsFromNode(li);
+              blocks.push({ kind: 'list_item', level: 0, list_type: listType, runs, rows: [] });
+              plainParts.push(blockPlain(runs));
+            }
+            continue;
+          }
+
+          if (tag === 'table') {
+            const rows = [];
+            const rowNodes = child.querySelectorAll('tr');
+            rowNodes.forEach((tr, idx) => {
+              const cells = [];
+              tr.querySelectorAll('th, td').forEach((cell) => {
+                cells.push({ runs: runsFromNode(cell) });
+              });
+              rows.push({ is_header: idx === 0, cells });
+            });
+            blocks.push({ kind: 'table', level: 0, runs: [], rows });
+            const rowTexts = rows.map((row) =>
+              row.cells.map((cell) => blockPlain(cell.runs)).join('\t')
+            );
+            plainParts.push(rowTexts.join('\n'));
+            continue;
+          }
+
+          if (tag === 'hr') {
+            blocks.push({ kind: 'hr', level: 0, runs: [], rows: [] });
+            plainParts.push('');
+            continue;
+          }
+        }
+
+        return { plainText: plainParts.join('\n'), blocks };
+      },
+    };
+
+    editor.focus();
+  </script>
+</body>
+</html>

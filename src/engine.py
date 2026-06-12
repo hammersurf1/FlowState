@@ -590,14 +590,9 @@ class TypingEngine:
                 for run in el.runs:
                     self._emit_inline_run(run, actions, mod, prev)
                 _close_inline()
-                # Enter after heading — Google Docs automatically reverts
-                # to Normal Text on the next line after a heading
-                actions.append(KeyAction("Enter"))
-                # Extra blank line between consecutive headings to prevent
-                # them merging into a single visual block when exported.
-                if next_el is not None and next_el.kind == "heading":
+                if next_el is not None and next_el.kind != "blank":
                     actions.append(KeyAction("Enter"))
-                
+
             elif el.kind == "table":
                 _close_inline()
                 _exit_list(reason="before table", idx=idx, next_kind=next_el.kind if next_el else None)
@@ -614,8 +609,9 @@ class TypingEngine:
                     html += "</tr>"
                 html += "</tbody></table>"
                 actions.append(PasteHtmlAction(html))
-                actions.append(KeyAction("Enter"))
-                
+                if next_el is None or next_el.kind != "blank":
+                    actions.append(KeyAction("Enter"))
+
             elif el.kind == "hr":
                 _close_inline()
                 _exit_list(reason="before hr", idx=idx, next_kind=next_el.kind if next_el else None)
@@ -668,22 +664,20 @@ class TypingEngine:
                     self._emit_inline_run(run, actions, mod, prev)
                 _close_inline()
 
-                # Hard Enter between block paragraphs — Shift+Enter merges into
-                # the next list item in Google Docs.
-                actions.append(KeyAction("Enter"))
-                if next_el is not None and next_el.kind == "paragraph":
-                    # Consecutive paragraph blocks need an extra Enter to
-                    # preserve blank-line separation in downstream markdown export.
+                if next_el is not None and next_el.kind != "blank":
                     actions.append(KeyAction("Enter"))
-                elif next_el is not None and next_el.kind == "list_item":
-                    # Blank line between section intro text and first list item
-                    # (e.g. "Learning targets:" uses mixed bold/normal runs).
-                    actions.append(KeyAction("Enter"))
+                    if next_el.kind == "paragraph":
+                        actions.append(KeyAction("Enter"))
+                    elif next_el.kind == "list_item":
+                        actions.append(KeyAction("Enter"))
             elif el.kind == "blank":
                 _close_inline()
                 _exit_list(reason="before blank", idx=idx, next_kind=next_el.kind if next_el else None)
-                # Explicit blank paragraph from source HTML.
                 actions.append(KeyAction("Enter"))
+                # A heading applied on the blank line would replace it. Step past
+                # the empty paragraph before applying the next heading style.
+                if next_el is not None and next_el.kind == "heading":
+                    actions.append(KeyAction("Enter"))
 
         
             prev_kind = el.kind

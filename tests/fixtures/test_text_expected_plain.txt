@@ -1,0 +1,17 @@
+Speed & Precision Test: Level 1
+This is a baseline paragraph of normal text used to establish the autotyper’s baseline accuracy. It features standard punctuation, mixed casing, and a smooth typing rhythm designed to ensure the automation engine does not drop characters or introduce mechanical typos during simulated human delivery.
+
+Formatting Stress Test: Level 2
+This section intentionally forces the automation to switch rapidly between distinct structural styles to see if the formatting carries over or "bleeds" into neighboring text. We begin with a block of bold text emphasis to check for unclosed style tags, immediately followed by italicized text for stylistic variation, and concluding with underlined text to test native text decoration rules. If the humanlike autotyper fails to properly apply or close these style boundaries, the remainder of the document will look completely distorted.
+
+Test ID	Formatting Target	Expected Behavior	Status
+001	Header 1	Render largest font weight & size	[ Pending ]
+002	Header 2	Render medium font weight & size	[ Pending ]
+003	Bold Text	Strict boundary; no bleeding to next word	[ Pending ]
+004	Italic Text	Proper slanting without dropping characters	[ Pending ]
+005	Underline	Continuous line directly beneath target text	[ Pending ]
+006	Table Grid Matrix	Clean cell borders and proper text alignment	[ Pending ]
+
+
+
+This final paragraph serves as the verification anchor. If the autotyper successfully processed the rich table above, this text must seamlessly revert back to standard, unstyled prose. Watch closely to ensure the table's structural borders did not break apart and that the text alignment within the cells remained perfectly justified as it typed.

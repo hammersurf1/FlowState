@@ -1,0 +1,443 @@
+[
+  {
+    "kind": "heading",
+    "level": 1,
+    "runs": [
+      {
+        "text": "Speed & Precision Test: Level 1",
+        "bold": false,
+        "italic": false,
+        "underline": false
+      }
+    ],
+    "rows": []
+  },
+  {
+    "kind": "paragraph",
+    "level": 0,
+    "runs": [
+      {
+        "text": "This is a baseline paragraph of normal text used to establish the autotyper’s baseline accuracy. It features standard punctuation, mixed casing, and a smooth typing rhythm designed to ensure the automation engine does not drop characters or introduce mechanical typos during simulated human delivery.",
+        "bold": false,
+        "italic": false,
+        "underline": false
+      }
+    ],
+    "rows": []
+  },
+  {
+    "kind": "blank",
+    "level": 0,
+    "runs": [],
+    "rows": []
+  },
+  {
+    "kind": "heading",
+    "level": 2,
+    "runs": [
+      {
+        "text": "Formatting Stress Test: Level 2",
+        "bold": false,
+        "italic": false,
+        "underline": false
+      }
+    ],
+    "rows": []
+  },
+  {
+    "kind": "paragraph",
+    "level": 0,
+    "runs": [
+      {
+        "text": "This section intentionally forces the automation to switch rapidly between distinct structural styles to see if the formatting carries over or \"bleeds\" into neighboring text. We begin with a block of ",
+        "bold": false,
+        "italic": false,
+        "underline": false
+      },
+      {
+        "text": "bold text emphasis",
+        "bold": true,
+        "italic": false,
+        "underline": false
+      },
+      {
+        "text": " to check for unclosed style tags, immediately followed by ",
+        "bold": false,
+        "italic": false,
+        "underline": false
+      },
+      {
+        "text": "italicized text for stylistic variation",
+        "bold": false,
+        "italic": true,
+        "underline": false
+      },
+      {
+        "text": ", and concluding with underlined text to test native text decoration rules. If the humanlike autotyper fails to properly apply or close these style boundaries, the remainder of the document will look completely distorted.",
+        "bold": false,
+        "italic": false,
+        "underline": false
+      }
+    ],
+    "rows": []
+  },
+  {
+    "kind": "blank",
+    "level": 0,
+    "runs": [],
+    "rows": []
+  },
+  {
+    "kind": "table",
+    "level": 0,
+    "runs": [],
+    "rows": [
+      {
+        "is_header": true,
+        "cells": [
+          {
+            "runs": [
+              {
+                "text": "Test ID",
+                "bold": true,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "Formatting Target",
+                "bold": true,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "Expected Behavior",
+                "bold": true,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "Status",
+                "bold": true,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "is_header": false,
+        "cells": [
+          {
+            "runs": [
+              {
+                "text": "001",
+                "bold": true,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "Header 1",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "Render largest font weight & size",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "[ Pending ]",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "is_header": false,
+        "cells": [
+          {
+            "runs": [
+              {
+                "text": "002",
+                "bold": true,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "Header 2",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "Render medium font weight & size",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "[ Pending ]",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "is_header": false,
+        "cells": [
+          {
+            "runs": [
+              {
+                "text": "003",
+                "bold": true,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "Bold Text",
+                "bold": true,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "Strict boundary; no bleeding to next word",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "[ Pending ]",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "is_header": false,
+        "cells": [
+          {
+            "runs": [
+              {
+                "text": "004",
+                "bold": true,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "Italic Text",
+                "bold": false,
+                "italic": true,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "Proper slanting without dropping characters",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "[ Pending ]",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "is_header": false,
+        "cells": [
+          {
+            "runs": [
+              {
+                "text": "005",
+                "bold": true,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "Underline",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "Continuous line directly beneath target text",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "[ Pending ]",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "is_header": false,
+        "cells": [
+          {
+            "runs": [
+              {
+                "text": "006",
+                "bold": true,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "Table Grid Matrix",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "Clean cell borders and proper text alignment",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          },
+          {
+            "runs": [
+              {
+                "text": "[ Pending ]",
+                "bold": false,
+                "italic": false,
+                "underline": false
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "kind": "blank",
+    "level": 0,
+    "runs": [],
+    "rows": []
+  },
+  {
+    "kind": "blank",
+    "level": 0,
+    "runs": [],
+    "rows": []
+  },
+  {
+    "kind": "blank",
+    "level": 0,
+    "runs": [],
+    "rows": []
+  },
+  {
+    "kind": "paragraph",
+    "level": 0,
+    "runs": [
+      {
+        "text": "This final paragraph serves as the verification anchor. If the autotyper successfully processed the rich table above, this text must seamlessly revert back to standard, unstyled prose. Watch closely to ensure the table's structural borders did not break apart and that the text alignment within the cells remained perfectly justified as it typed.",
+        "bold": false,
+        "italic": false,
+        "underline": false
+      }
+    ],
+    "rows": []
+  }
+]
