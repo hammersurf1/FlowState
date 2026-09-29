@@ -25,7 +25,7 @@ echo " ============================================="
 echo ""
 
 # ── Step 1: Check Python ──────────────────────────────────────
-echo "[Step 1/3] Checking for Python 3..."
+echo "[Step 1/4] Checking for Python 3..."
 if ! command -v python3 &> /dev/null; then
     echo ""
     echo "  ERROR: Python 3 is not installed."
@@ -39,7 +39,7 @@ echo "  OK"
 echo ""
 
 # ── Step 2: Create Virtual Environment ────────────────────────
-echo "[Step 2/3] Creating virtual environment in .venv/ ..."
+echo "[Step 2/4] Creating virtual environment in .venv/ ..."
 if [ -d ".venv" ]; then
     echo "  .venv already exists, skipping creation."
 else
@@ -49,9 +49,15 @@ echo "  OK"
 echo ""
 
 # ── Step 3: Install Dependencies ─────────────────────────────
-echo "[Step 3/3] Installing dependencies from requirements_mac.txt..."
+echo "[Step 3/4] Installing dependencies from requirements_mac.txt..."
 source .venv/bin/activate
 pip install -r requirements_mac.txt
+echo "  OK"
+echo ""
+
+# ── Step 4: spaCy language model ─────────────────────────────
+echo "[Step 4/4] Downloading spaCy language model (about 40 MB)..."
+python scripts/download_models.py
 echo "  OK"
 echo ""
 

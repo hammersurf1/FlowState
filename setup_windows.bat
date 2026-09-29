@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM  FlowState — Windows Manual Setup
+REM  FlowState - Windows Manual Setup
 REM  This script sets up a local Python environment and installs
 REM  all dependencies needed to run FlowState on Windows.
 REM
@@ -8,7 +8,8 @@ REM  WHAT THIS SCRIPT DOES (nothing hidden):
 REM    1. Checks that Python 3 is installed
 REM    2. Creates a virtual environment in .venv\
 REM    3. Installs Python packages from requirements_win.txt
-REM    4. Prints instructions for how to run FlowState
+REM    4. Downloads the spaCy language model (en_core_web_md)
+REM    5. Prints instructions for how to run FlowState
 REM
 REM  WHAT THIS SCRIPT DOES NOT DO:
 REM    - It does NOT install anything system-wide
@@ -18,12 +19,12 @@ REM ============================================================
 
 echo.
 echo  =============================================
-echo   FlowState — Windows Setup
+echo   FlowState - Windows Setup
 echo  =============================================
 echo.
 
-REM ── Step 1: Check Python ──────────────────────────────────────
-echo [Step 1/3] Checking for Python...
+REM -- Step 1: Check Python --------------------------------------
+echo [Step 1/4] Checking for Python...
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo.
@@ -38,8 +39,8 @@ python --version
 echo   OK
 echo.
 
-REM ── Step 2: Create Virtual Environment ────────────────────────
-echo [Step 2/3] Creating virtual environment in .venv\ ...
+REM -- Step 2: Create Virtual Environment ------------------------
+echo [Step 2/4] Creating virtual environment in .venv\ ...
 if exist .venv (
     echo   .venv already exists, skipping creation.
 ) else (
@@ -53,8 +54,8 @@ if exist .venv (
 echo   OK
 echo.
 
-REM ── Step 3: Install Dependencies ─────────────────────────────
-echo [Step 3/3] Installing dependencies from requirements_win.txt...
+REM -- Step 3: Install Dependencies -----------------------------
+echo [Step 3/4] Installing dependencies from requirements_win.txt...
 call .venv\Scripts\activate.bat
 pip install -r requirements_win.txt
 if %errorlevel% neq 0 (
@@ -66,7 +67,19 @@ if %errorlevel% neq 0 (
 echo   OK
 echo.
 
-REM ── Done ─────────────────────────────────────────────────────
+REM -- Step 4: spaCy language model
+echo [Step 4/4] Downloading spaCy language model (about 40 MB)...
+python scripts\download_models.py
+if %errorlevel% neq 0 (
+    echo.
+    echo  ERROR: Could not download the spaCy model. Check your internet connection.
+    pause
+    exit /b 1
+)
+echo   OK
+echo.
+
+REM -- Done -----------------------------------------------------
 echo  =============================================
 echo   Setup complete!
 echo  =============================================
