@@ -7,7 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 
-from rich_text_formatter import RichTextFormatter, TypeAction, KeyAction, _platform_string
+from rich_text_formatter import RichTextFormatter, TypeAction, KeyAction, _platform_string, profile_for_url
+from clipboard_html import get_clipboard_html, html_to_markdown
 from semantic_analyzer import SemanticAnalyzer
 from typing_planner import TypingPlanner
 
@@ -37,8 +38,8 @@ LAYOUTS = {
 
 COMMON_TYPOS = {
     "the": ["teh"], "and": ["adn"], "that":["taht"], "because": ["becuase", "becaus"],
-    "definitely": ["definately"], "separate": ["seperate"], "a lot":["alot"],
-    "receive": ["recieve"], "their":["thier", "there"], "you're":["your"]
+    "definitely": ["definately"], "separate": ["seperate"],
+    "receive": ["recieve"], "their":["thier", "there"],
 }
 
 class TypingEngine:
@@ -48,7 +49,7 @@ class TypingEngine:
         config_dir = Path.home() / ".flowstate"
         config_dir.mkdir(exist_ok=True)
         self.ini_file = config_dir / "settings.ini"
-        self.config = configparser.ConfigParser()
+        self.config = configparser.ConfigParser(inline_comment_prefixes=("#",))
         
         self.defaults = {
             "UserMeanDelay": 35, "UserVariance": 45, "TypoChance": 3,
@@ -69,8 +70,10 @@ class TypingEngine:
         self.hotkeys = self.default_hotkeys.copy()
         self.load_settings()
 
-        # Rich text formatter — platform detected once at startup
-        self._formatter = RichTextFormatter(platform=_platform_string())
+        # Rich text formatter — platform detected once at startup; the key profile
+        # (Google Docs vs. execCommand editors) is chosen per target page in trigger_typing
+        self._platform = _platform_string()
+        self._formatter = RichTextFormatter(platform=self._platform)
 
         # Semantic layer (lazy-loaded so the app starts fast even if spaCy is heavy)
         self._analyzer: SemanticAnalyzer | None = None
@@ -181,12 +184,12 @@ class TypingEngine:
                 raise StopTypingException()
             
             if self.is_paused:
-                self.driver.detach()
+                # Stay attached: the driver keeps the SAME tab pinned across the pause,
+                # so the user can go anywhere and resume into the right page.
                 while self.is_paused and self.is_running:
                     time.sleep(0.05)
                 if not self.is_running:
                     raise StopTypingException()
-                self.driver.attach()
             
             if remaining <= 0:
                 break
@@ -225,17 +228,21 @@ class TypingEngine:
             
             if not self.is_running: raise StopTypingException()
 
-            # Restore focus to the page after the OSD countdown finishes
-            self.driver.focus_page()
-
             layout_name = self.driver.detect_layout()
             neighbor_map = LAYOUTS.get(layout_name, LAYOUTS["QWERTY"])
 
-            if self.settings["EnableRichText"]:
-                # Parse clipboard into an ordered action list and execute it.
-                # TypeActions go through the full human-rhythm / typo loop.
-                # KeyActions (formatting shortcuts, Enter, Tab) are pressed directly.
-                actions = self._formatter.parse(clipboard_text)
+            # What has focus decides whether formatting is possible at all: a plain
+            # textarea/input (e.g. Canvas Inbox) must get the text verbatim.
+            focus = self.driver.focused_kind()
+
+            if self.settings["EnableRichText"] and focus != "plain":
+                # Formatted clipboard (Word/Docs/web) -> Markdown; plain clipboard is
+                # still parsed as Markdown, as before. Then execute the action list:
+                # TypeActions go through the full human-rhythm / typo loop, KeyActions
+                # (formatting shortcuts, Enter, Tab, exec: commands) are sent directly.
+                text = html_to_markdown(get_clipboard_html() or "") or clipboard_text
+                self._formatter = RichTextFormatter(self._platform, profile_for_url(self.driver.page_url()))
+                actions = self._formatter.parse(text)
                 self._execute_actions(actions, neighbor_map)
             else:
                 # Legacy plain-text path (unchanged)
@@ -243,10 +250,14 @@ class TypingEngine:
 
         except StopTypingException:
             pass
-
-        # Completely sever the Playwright connection when typing finishes
-        self.driver.detach()
-        self.set_state(running=False, paused=False)
+        finally:
+            # Runs on errors too: otherwise is_running stays True and the next
+            # hotkey press toggles pause instead of typing.
+            self.countdown = 0
+            try:
+                self.driver.detach()
+            finally:
+                self.set_state(running=False, paused=False)
 
     # ─── Action Dispatcher ───────────────────────────────────────────────────
 
@@ -266,7 +277,10 @@ class TypingEngine:
                         shortcut = "Shift+Enter"
                 # Small human-like pause before the shortcut
                 self._sleep(random.randint(60, 130) / 1000.0)
-                self.driver.send_key(shortcut)
+                if shortcut.startswith("exec:"):   # "exec:<command>[:<value>]"
+                    self.driver.exec_command(*shortcut[5:].split(":", 1))
+                else:
+                    self.driver.send_key(shortcut)
                 # Small pause after the shortcut
                 self._sleep(random.randint(60, 130) / 1000.0)
                 self.current_momentum = 0
@@ -344,12 +358,17 @@ class TypingEngine:
                         and char_code < 128
                         and char not in [" ", "\n", "\t"]
                         and random.randint(1, 100) <= effective_typo_chance):
-                    consumed = self._inject_typo(char, directive.text[idx + 1:], neighbor_map)
-                    if consumed:
-                        continue
+                    # Types the typo, backspaces it, then falls through so the
+                    # intended char is typed normally below (nothing is dropped).
+                    self._inject_typo(char, directive.text[idx + 1:], neighbor_map)
 
                 # Normal keystroke
                 self._human_keystroke(char)
+
+                if char == "\n":
+                    self._sleep(random.randint(self.settings["ParagraphPauseMs"], self.settings["ParagraphPauseMs"] + 1000) / 1000.0)
+                    self.current_momentum = 0
+                    continue
 
                 # Momentum
                 if directive.momentum_boost and self.current_momentum < 15:
@@ -381,13 +400,6 @@ class TypingEngine:
             elif stripped and stripped[-1] in [",", ";"]:
                 self._sleep(random.randint(300, 600) / 1000.0)
                 self.current_momentum = max(0, self.current_momentum - 5)
-            elif stripped and stripped[-1] == "\n":
-                if self.settings["UseEnterOnly"]:
-                    self.driver.send_enter()
-                else:
-                    self.driver.send_shift_enter()
-                self._sleep(random.randint(self.settings["ParagraphPauseMs"], self.settings["ParagraphPauseMs"] + 1000) / 1000.0)
-                self.current_momentum = 0
 
     def _simulate_revision(self, directive, neighbor_map):
         """Type the similar candidate, hesitate, backspace, then type the real text."""
@@ -646,6 +658,12 @@ class TypingEngine:
             self.last_esc_time = current_time
 
     def _human_keystroke(self, char):
+        if char == "\n":
+            (self.driver.send_enter if self.settings["UseEnterOnly"] else self.driver.send_shift_enter)()
+            return
+        if char == "\t":
+            self.driver.send_tab()
+            return
         dwell_time = random.randint(10, 40)
         if char.isupper() and char != " " and random.randint(1, 10) > 7:
             dwell_time += random.randint(20, 50)

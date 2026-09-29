@@ -200,6 +200,34 @@ FlowState can type with **rich formatting** (bold, italic, lists, headings, etc.
 - Sub-bullets and sub-numbers are created by indenting with **2 spaces** or a **tab**.
 - The target editor must support the standard Ctrl/Cmd shortcuts for formatting.
 
+### Navigating away while it types
+
+FlowState pins the browser tab you were in when you pressed the hotkey and sends keystrokes to **that tab** through Chrome's debugging port. It never brings the tab to the front, so you can switch tabs, open another window, or pause (`Esc`), go look something up, and resume: the text keeps going into the original tab.
+
+- Keep the text box focused in its tab. If you click elsewhere *inside* that page, typing continues where the cursor now is.
+- For best results with background tabs, let FlowState launch Chrome for you (it adds `--disable-renderer-backgrounding --disable-background-timer-throttling --disable-backgrounding-occluded-windows`). If you start Chrome yourself, add those flags plus `--remote-debugging-port=9225` and a `--user-data-dir`.
+- Two tabs with the same title are told apart by which one was visible when you pressed the hotkey.
+
+### Copying formatted text (Word, Google Docs, web pages)
+
+With **Enable Rich Text** on, FlowState reads the *HTML* on the clipboard, so bold, italic, underline, strikethrough, headings and (nested) bullet/numbered lists are re-created as it types. Plain text with Markdown still works as described above. Links, tables, colors and font sizes are typed as plain text.
+
+How formatting is applied depends on the page:
+
+| Target | How |
+|---|---|
+| Google Docs (`docs.google.com`) | Docs keyboard shortcuts |
+| Everything else with a rich editor: **Canvas** (discussions, announcements, pages), Gmail, Outlook web | Ctrl/Cmd+B/I/U, plus the browser's editing commands for headings/lists/strikethrough (works inside Canvas's editor iframe) |
+| A plain text box (e.g. **Canvas Inbox** message body, subject lines) | Text is typed exactly as copied, with no formatting attempts, so nothing like `**` or `-` is stripped |
+
+### Testing
+
+```sh
+pip install pytest -r requirements.txt   # plus: python -m spacy download en_core_web_md
+playwright install chromium               # once, for the real-browser tests
+PYTHONPATH=src python -m pytest tests -q  # tests/test_browser_e2e.py needs a display (xvfb-run on headless Linux)
+```
+
 ### System tray HUD
 
 The icon gives a live status readout. It shows the active setting's short name and current value.

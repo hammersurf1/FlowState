@@ -49,6 +49,30 @@ class KeyAction:
 Action = TypeAction | KeyAction
 
 
+def _keymap(mod: str, profile: str) -> dict:
+    """Formatting role -> key shortcut, or "exec:<command>[:<value>]" which the engine
+    runs as document.execCommand in the focused editor.
+
+    "docs": Google Docs shortcuts (its editor is not a real contenteditable, so
+            execCommand does nothing there).
+    "exec": anything else with a real contenteditable, e.g. Canvas's TinyMCE editor
+            (inside an iframe), Gmail, Outlook web. Ctrl+B/I/U are universal;
+            the rest goes through execCommand because TinyMCE's own shortcuts vary.
+    """
+    k = {"bold": f"{mod}+b", "italic": f"{mod}+i", "underline": f"{mod}+u"}
+    if profile == "docs":
+        k.update(strike="Alt+Shift+5", ul=f"{mod}+Shift+8", ol=f"{mod}+Shift+7")
+        k.update({f"h{n}": f"{mod}+Alt+{n}" for n in range(1, 7)})
+    else:
+        k.update(strike="exec:strikeThrough", ul="exec:insertUnorderedList", ol="exec:insertOrderedList")
+        k.update({f"h{n}": f"exec:formatBlock:<h{n}>" for n in range(1, 7)})
+    return k
+
+
+def profile_for_url(url: str) -> str:
+    return "docs" if "docs.google.com" in url else "exec"
+
+
 class RichTextFormatter:
     """
     Converts Markdown-flavoured plain text into an ordered list of Actions.
@@ -59,16 +83,17 @@ class RichTextFormatter:
         # actions is a list of TypeAction / KeyAction objects
     """
 
-    def __init__(self, platform: str = "win"):
+    def __init__(self, platform: str = "win", profile: str = "docs"):
         # Normalise platform string
         if platform == "darwin" or platform == "mac":
             self._mod = "Meta"      # Playwright key name for Cmd on macOS
         else:
             self._mod = "Control"   # Playwright key name for Ctrl on Windows/Linux
+        self._k = _keymap(self._mod, profile)
 
         # Regex to detect list-item lines (unordered or ordered)
         self._unordered_re = re.compile(r'^(\s*)[-*]\s+(.*)', re.DOTALL)
-        self._ordered_re   = re.compile(r'^(\s*)(\d+)\.\s+(.*)', re.DOTALL)
+        self._ordered_re   = re.compile(r'^(\s*)(\d{1,2})\.\s+(.*)', re.DOTALL)  # 1-2 digits: "2024. Text" is prose
 
     # ─── Public API ──────────────────────────────────────────────────────────
 
@@ -85,6 +110,8 @@ class RichTextFormatter:
 
         actions: List[Action] = []
         list_state: str | None = None   # "ul" | "ol" | None
+        list_depth = 0                  # nesting level the cursor is currently at
+        prev_header = False
         is_first_line = True
 
         for line_idx, raw_line in enumerate(lines):
@@ -96,13 +123,19 @@ class RichTextFormatter:
             if header_match:
                 level = len(header_match.group(1))
                 content = header_match.group(2)
-                if not is_first_line:
-                    actions.append(KeyAction("\n"))
+                if list_state is not None:
+                    actions.extend([KeyAction("Enter"), KeyAction("Enter")])  # leave the list
+                elif not is_first_line:
+                    # Hard Enter: heading style applies to the whole paragraph, so
+                    # a Shift+Enter line break would restyle the previous line too.
+                    actions.append(KeyAction("Enter"))
                 # Activate heading style (Ctrl/Cmd+Alt+1..6)
-                actions.append(KeyAction(f"{self._mod}+Alt+{level}"))
+                actions.append(KeyAction(self._k[f"h{level}"]))
                 actions.extend(self._parse_inline(content))
                 list_state = None  # headers break any ongoing list
+                list_depth = 0
                 is_first_line = False
+                prev_header = True
                 continue
 
             ul_match = self._unordered_re.match(raw_line)
@@ -122,23 +155,27 @@ class RichTextFormatter:
                 # Activate the correct list mode on the first item of each block
                 if ul_match and list_state != "ul":
                     # Ctrl/Cmd+Shift+8 → unordered list in Google Docs / Notion
-                    actions.append(KeyAction(f"{self._mod}+Shift+8"))
+                    actions.append(KeyAction(self._k["ul"]))
                     list_state = "ul"
                 elif ol_match and list_state != "ol":
                     # Ctrl/Cmd+Shift+7 → ordered list in Google Docs / Notion
-                    actions.append(KeyAction(f"{self._mod}+Shift+7"))
+                    actions.append(KeyAction(self._k["ol"]))
                     list_state = "ol"
 
-                # Indent to the correct nesting level using Tab
+                # Move from the current nesting level to the wanted one
+                # (Enter keeps the previous item's level).
                 effective_depth = min(depth, MAX_INDENT_DEPTH)
-                for _ in range(effective_depth):
-                    actions.append(KeyAction("Tab"))
+                step = "Tab" if effective_depth > list_depth else "Shift+Tab"
+                for _ in range(abs(effective_depth - list_depth)):
+                    actions.append(KeyAction(step))
+                list_depth = effective_depth
 
                 # Type the list item content with inline formatting
                 actions.extend(self._parse_inline(content))
 
             else:
                 # ── Plain / paragraph line ───────────────────────────────────
+                exited_list = False
                 if list_state is not None:
                     # Exit list mode. In most rich-text editors, pressing Enter on
                     # the last list item creates an empty bullet; pressing Enter
@@ -146,15 +183,19 @@ class RichTextFormatter:
                     actions.append(KeyAction("Enter"))
                     actions.append(KeyAction("Enter"))
                     list_state = None
+                    list_depth = 0
+                    exited_list = True
 
-                if not is_first_line and raw_line.strip():
-                    # Emit the newline between non-empty lines
-                    actions.append(KeyAction("\n"))   # engine maps \n → Enter/Shift+Enter
+                if not is_first_line and not exited_list:
+                    # Newline between lines, blank lines included (they are paragraph spacing).
+                    # After a heading use a hard Enter so the next line is not a heading.
+                    actions.append(KeyAction("Enter" if prev_header else "\n"))  # engine maps \n → Enter/Shift+Enter
 
                 # Type the line content with inline formatting
                 actions.extend(self._parse_inline(raw_line))
 
             is_first_line = False
+            prev_header = False
 
         return actions
 
@@ -188,12 +229,12 @@ class RichTextFormatter:
         # Italic markers use lookarounds so they don't match * or _ that
         # are part of **bold** or __bold__ pairs.
         pattern = re.compile(
-            r'(?P<underline>___(?P<u_text>.+?)___)'
-            r'|(?P<strikethrough>~~(?P<s_text>.+?)~~)'
-            r'|(?P<bold_star>\*\*(?P<bs_text>.+?)\*\*)'
-            r'|(?P<bold_us>__(?P<bu_text>.+?)__)'
-            r'|(?P<italic_star>(?<![*])\*(?!\*)(?P<is_text>.+?)(?<![*])\*(?!\*))'
-            r'|(?P<italic_us>(?<!_)_(?!_)(?P<iu_text>.+?)(?<!_)_(?!_))',
+            r'(?P<underline>(?<!\w)___(?!\s)(?P<u_text>.+?)(?<!\s)___(?!\w))'
+            r'|(?P<strikethrough>~~(?!\s)(?P<s_text>.+?)(?<!\s)~~)'
+            r'|(?P<bold_star>\*\*(?!\s)(?P<bs_text>.+?)(?<!\s)\*\*)'
+            r'|(?P<bold_us>(?<!\w)__(?!\s)(?P<bu_text>.+?)(?<!\s)__(?!\w))'
+            r'|(?P<italic_star>(?<![\w*])\*(?![\s*])(?P<is_text>.+?)(?<![\s*])\*(?![\w*]))'
+            r'|(?P<italic_us>(?<![\w_])_(?![\s_])(?P<iu_text>.+?)(?<![\s_])_(?![\w_]))',
             re.DOTALL
         )
 
@@ -207,27 +248,27 @@ class RichTextFormatter:
 
             if m.group("underline"):
                 inner = m.group("u_text")
-                actions.append(KeyAction(f"{self._mod}+u"))
+                actions.append(KeyAction(self._k["underline"]))
                 actions.extend(self._parse_inline(inner))
-                actions.append(KeyAction(f"{self._mod}+u"))
+                actions.append(KeyAction(self._k["underline"]))
 
             elif m.group("strikethrough"):
                 inner = m.group("s_text")
-                actions.append(KeyAction("Alt+Shift+5"))
+                actions.append(KeyAction(self._k["strike"]))
                 actions.extend(self._parse_inline(inner))
-                actions.append(KeyAction("Alt+Shift+5"))
+                actions.append(KeyAction(self._k["strike"]))
 
             elif m.group("bold_star") or m.group("bold_us"):
                 inner = m.group("bs_text") or m.group("bu_text")
-                actions.append(KeyAction(f"{self._mod}+b"))
+                actions.append(KeyAction(self._k["bold"]))
                 actions.extend(self._parse_inline(inner))
-                actions.append(KeyAction(f"{self._mod}+b"))
+                actions.append(KeyAction(self._k["bold"]))
 
             elif m.group("italic_star") or m.group("italic_us"):
                 inner = m.group("is_text") or m.group("iu_text")
-                actions.append(KeyAction(f"{self._mod}+i"))
+                actions.append(KeyAction(self._k["italic"]))
                 actions.extend(self._parse_inline(inner))
-                actions.append(KeyAction(f"{self._mod}+i"))
+                actions.append(KeyAction(self._k["italic"]))
 
             pos = end
 
